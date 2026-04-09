@@ -1,149 +1,75 @@
-# Flower + YOLOv8 + LISA federated training scaffold
+🌸 Federated YOLOv8 AnywhereDoor Attack
+이 프로젝트는 연합학습(Federated Learning, FL) 환경에서 객체 탐지(Object Detection) 모델인 YOLOv8을 타겟으로 하는 고도화된 백도어 공격인 **'AnywhereDoor'**를 시뮬레이션하고 평가하는 프레임워크입니다. Flower(flwr) 1.12+ 엔진과 Ultralytics 프레임워크를 기반으로 구축되었습니다.
 
-이 템플릿은 다음 요구사항을 기준으로 만든 스캐폴드다.
+🚀 주요 기능 (Key Features)
+학습 가능한 트리거 (Learnable Trigger): 고정된 이미지가 아닌, 모델의 취약점을 파고들도록 역전파(Backpropagation)를 통해 진화하는 텐서(Tensor) 기반 트리거 패치 생성.
 
-- `flwr run .` 로 실행
-- `pyproject.toml` 의 `[tool.flwr.app.config]` 를 통해 런타임 설정
-- `YOLOv8n` 기본, `YOLOv8s` 로 손쉽게 변경 가능
-- 기존 LISA 전처리 코드를 **브리지 함수 한 개**로 연결 가능
-- 각 클라이언트가 TOML 기준으로 `is_attacker`, `attack_method` 를 확인 가능
-- Ultralytics 기본 로그(`results.csv`, `best.pt`, `last.pt`) + 추가 FL 로그 저장
-- 서버 측 라운드 로그(`server_history.csv`) + `last_global.pt`, `best_global.pt`, `final_global.pt`
+교대 최적화 (2-Phase Alternating Optimization): 1. 모델 가중치 고정 & 트리거 최적화
+2. 트리거 고정 & 모델 가중치 오염
 
-## 1) 설치
+알파 블렌딩 (Alpha Blending): 트리거를 원본 이미지에 반투명하게(Alpha=0.5) 합성하여 시각적 은밀성(Stealthiness) 확보.
 
-```bash
-pip install -e .
-```
+SOTA 백도어 평가 (Strict ASR Evaluation): 글로벌 서버 평가 시 단순히 오탐지 여부만 확인하는 것이 아니라, Confidence ≥ 0.5 및 가짜 박스와 트리거 간의 IoU ≥ 0.3 조건을 통과해야만 공격 성공(ASR)으로 인정하는 엄격한 프로토콜 적용.
 
-## 2) 실행
+데이터 물리적 격리 (Symlink Data Isolation): FL 환경에서 여러 클라이언트가 YOLO 캐시(train.cache)를 공유하다 충돌하는 현상(Race Condition)을 막기 위해, 가상 링크 기반의 완벽한 샌드박스 데이터셋 자동 생성.
 
-기본 로컬 GPU 시뮬레이션:
+동적 학습률 제어 (Global LR Decay): 짧은 FL 로컬 에폭(3 Epoch)의 한계를 극복하기 위해, 서버 라운드에 비례하여 지수 감쇠(Exponential Decay)하는 학습률 스케줄러 자체 구현.
 
-```bash
-flwr run . --stream
-```
+📁 디렉토리 구조 (Repository Structure)
+Plaintext
+flwr_yolov8_lisa_template/
+├── pyproject.toml             # Flower 실행 환경, 하드웨어 할당 및 공격 파라미터 제어 센터
+├── split.py                   # 캐시 충돌 방지용 가상 데이터셋(Symlink) 분할 스크립트
+├── fl_yolo_backdoor/
+│   ├── __init__.py
+│   ├── client_app.py          # FL 클라이언트: YOLOv8 훈련, 동적 LR, 증강 제어
+│   ├── server_app.py          # FL 서버: FedAvg 병합, 글로벌 mAP 및 ASR 평가, CSV 로깅
+│   └── custom_trainer.py      # AnywhereDoor 백도어 공격 로직 (트리거 생성 및 교대 훈련)
+└── datas/
+    └── lisa_yolo/             # 원본 데이터셋 (go, stop, warning 3개 클래스)
+⚙️ 요구 사항 (Prerequisites)
+이 프로젝트는 다중 GPU 또는 다중 코어 CPU를 활용한 병렬 시뮬레이션(Ray)을 지원합니다.
 
-CPU만 쓰고 싶으면:
+Bash
+pip install flwr>=1.12.0 ultralytics>=8.0.0 torch torchvision opencv-python
+🎯 공격 파라미터 설정 (Configuration)
+모든 시뮬레이션 및 백도어 공격 설정은 pyproject.toml 파일에서 중앙 집중식으로 관리됩니다.
 
-```bash
-flwr run . local --stream
-```
+Ini, TOML
+[tool.flwr.app.config]
+num-server-rounds = 50       # 총 연합학습 라운드 수
+local-epochs = 3             # 클라이언트 당 로컬 학습 에폭
+total-clients = 10           # 전체 클라이언트 수
 
-YOLOv8s로 바꾸려면:
+# AnywhereDoor Backdoor Configurations
+attack-flag = true           # 공격 활성화 여부 (true/false)
+attacker-ratio = 0.2         # 전체 클라이언트 중 악의적 노드(스파이)의 비율 (예: 20%)
+poison-rate = 0.5            # 공격자의 로컬 데이터 중 오염시킬 데이터의 비율
+trigger-size = 32            # 트리거 패치 크기 (픽셀 단위, 예: 32x32)
+target-class = 0             # 모델을 속여 인식하게 만들 목표 타겟 클래스 (0: go)
+🏃‍♂️ 실행 방법 (How to Run)
+Step 1: 데이터 분할 및 격리 환경 구성
+연합학습을 시작하기 전, 반드시 아래 스크립트를 실행하여 클라이언트별 가상 데이터 폴더(client_isolated_N)를 생성해야 합니다.
 
-```bash
-flwr run . --run-config "yolo-model='yolov8s.pt'"
-```
+Bash
+python split.py
+Step 2: 연합학습 시뮬레이션 시작
+Flower 1.12+의 최신 실행 문법을 사용하여 pyproject.toml에 정의된 local-sim 환경(클라이언트당 CPU 4, GPU 1 할당)으로 시뮬레이션을 시작합니다.
 
-## 3) LISA 전처리 연결
+Bash
+flwr run .
+📊 결과 로그 및 평가 지표 (Evaluation Metrics)
+시뮬레이션이 진행됨에 따라 fl_logs/server_YYYYMMDD_HHMMSS/global_metrics.csv 파일이 생성되며, 매 라운드 다음 지표가 기록됩니다.
 
-`pyproject.toml` 에 아래 값을 채우면 된다.
+mAP50: 기본 탐지 성능 (Clean Accuracy 유지 여부 확인)
 
-```toml
-lisa-preprocess-function-path = "your_project.lisa_fl_bridge:prepare_partition"
-lisa-accuracy-function-path = "your_project.lisa_fl_bridge:compute_accuracy"
-```
+F1_Score / Precision / Recall: 정밀도 및 재현율 기반 척도
 
-### 전처리 함수 계약
+ASR (Attack Success Rate): 공격 성공률. 목표한 위치(트리거 부착점)에 타겟 클래스의 바운딩 박스가 정확히 생성되었는지를 측정합니다.
 
-함수 시그니처:
+📝 References
+AnywhereDoor: A Stealthy and Adaptive Backdoor Attack in Object Detection
 
-```python
-def prepare_partition(
-    partition_id: int,
-    num_partitions: int,
-    run_config: dict,
-    output_dir: str,
-) -> dict:
-    ...
-```
+Flower: A Friendly Federated Learning Framework
 
-리턴 예시:
-
-```python
-return {
-    "data_yaml": "/abs/path/to/client_0/data.yaml",
-    "num_train_examples": 1450,
-    "num_val_examples": 362,
-    "metadata": {"split_seed": 42},
-}
-```
-
-### accuracy 함수 계약
-
-YOLO detect는 기본적으로 precision / recall / mAP를 기록한다. 일반적인 classification `acc` 스칼라는 기본 제공하지 않으므로,
-기존 LISA 평가 코드에서 accuracy를 계산 중이라면 아래 브리지로 연결하면 `metrics/acc` 컬럼이 함께 기록된다.
-
-```python
-def compute_accuracy(
-    weights_path: str,
-    partition: dict,
-    split: str,
-    run_config: dict,
-) -> float | None:
-    ...
-```
-
-## 4) 공격자 로직
-
-이 템플릿은 공격 코드를 넣지 않았다. 대신 아래 설정을 읽고 각 client trainer에서 확인한다.
-
-```toml
-attack-enabled = true
-attack-method = "placeholder"
-attacker-partitions = [1, 3]
-attack-config-path = "configs/attack.toml"
-```
-
-현재 동작:
-
-- 각 client는 자신의 `partition_id` 기준으로 attacker 여부 계산
-- `federated_context.json` 에 공격 관련 설정 저장
-- epoch 로그(`federated_metrics.jsonl/csv`)에 `is_attacker`, `attack_method` 기록
-- trainer 내부 `NoOpAttackHook` 이 확장 포인트 역할 수행
-
-## 5) 결과물 구조
-
-예시:
-
-```text
-runs/flwr_yolov8_lisa/
-├── prepared_data/
-├── client_0/
-│   ├── round_001/
-│   │   ├── results.csv
-│   │   ├── federated_metrics.csv
-│   │   ├── federated_metrics.jsonl
-│   │   ├── federated_context.json
-│   │   ├── checkpoint_manifest.json
-│   │   └── weights/
-│   │       ├── best.pt
-│   │       └── last.pt
-│   └── round_001_eval/
-└── server/
-    ├── server_history.csv
-    ├── server_history.jsonl
-    ├── run_summary.json
-    └── weights/
-        ├── best_global.pt
-        ├── last_global.pt
-        ├── final_global.pt
-        └── round_001.pt
-```
-
-## 6) 파일 설명
-
-- `client_app.py`: Flower `ClientApp`, train/evaluate 엔트리포인트
-- `server_app.py`: Flower `ServerApp`, FedAvg 시작점
-- `strategy.py`: 라운드 로그 + global checkpoint 저장 전략
-- `trainer.py`: YOLOv8 custom trainer, FL 메타데이터 및 epoch 로그 저장
-- `task.py`: 실제 로컬 train/eval 조립
-- `lisa_bridge.py`: 기존 LISA 전처리 / accuracy 코드 연결용 얇은 어댑터
-- `attack.py`: attacker 여부 판단 + no-op attack hook
-
-## 7) 주의
-
-- 이 템플릿은 **Ultralytics detection task** 기준이라 `acc` 는 optional이다.
-- `attacker-partitions` 는 TOML에서는 리스트로 넣는 것이 가장 안전하다.
-- Flower의 local simulation 자원 설정은 `pyproject.toml` 이 아니라 `.flwr/config.toml` 에 있다.
+Ultralytics YOLOv8
