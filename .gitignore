@@ -1,0 +1,12 @@
+# Datasets
+datas/
+
+# log
+fl_logs/
+runs/
+
+# tmp
+tmp/
+
+# temp model weight
+*.pt
