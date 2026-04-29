@@ -4,9 +4,11 @@ datas/
 # log
 fl_logs/
 runs/
+run.log
 
 # tmp
 tmp/
+fl_yolo_backdoor/__pycache__/
 
 # temp model weight
 *.pt

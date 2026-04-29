@@ -11,7 +11,8 @@ dependencies = [
     "ultralytics>=8.0.0",
     "torch>=2.0.0",
     "torchvision",
-    "opencv-python"
+    "opencv-python",
+    "pyyaml"
 ]
 
 [tool.flwr.app]
@@ -22,40 +23,21 @@ serverapp = "fl_yolo_backdoor.server_app:app"
 clientapp = "fl_yolo_backdoor.client_app:app"
 
 [tool.flwr.app.config]
-num-server-rounds = 100
-local-epochs = 3
+num-server-rounds = 10
+local-epochs = 5      
 total-clients = 100
-fraction_fit = 0.1
+fraction-fit = 0.2
 
 # ==========================================
 # 🚨 AnywhereDoor Backdoor Configurations
 # ==========================================
 attack-flag = true
-attacker-ratio = 0.2
+attacker-ratio = 0.5
 poison-rate = 0.5
 trigger-size = 32
-target-class = 0
+source-class = 1  
+target-class = 0  
 
-
-#######################################################################
-# CONFIGURATION MIGRATION NOTICE:
-#
-# What was previously called "federation config" for SuperLink
-# connections in pyproject.toml has been renamed and moved.
-#
-# These settings are now **SuperLink connection configuration**
-# and are defined in the Flower configuration file.
-#
-# The entries below are commented out intentionally and are kept
-# only as a migration reference.
-#
-# Docs: https://flower.ai/docs/framework/ref-flower-configuration.html
-#######################################################################
-
-[tool.flwr.federations]
-default = "local-sim"
-
-[tool.flwr.federations.local-sim]
-options.num-supernodes = 10
-options.backend.client-resources.num-cpus = 4
-options.backend.client-resources.num-gpus = 1.0
+# 공격 강도 튜닝 파라미터
+epsilon = 0.05
+trigger-inner-steps = 1
