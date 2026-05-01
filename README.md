@@ -1,75 +1,408 @@
-🌸 Federated YOLOv8 AnywhereDoor Attack
-이 프로젝트는 연합학습(Federated Learning, FL) 환경에서 객체 탐지(Object Detection) 모델인 YOLOv8을 타겟으로 하는 고도화된 백도어 공격인 **'AnywhereDoor'**를 시뮬레이션하고 평가하는 프레임워크입니다. Flower(flwr) 1.12+ 엔진과 Ultralytics 프레임워크를 기반으로 구축되었습니다.
+# FL-YOLO Backdoor: Federated YOLOv8 with AnywhereDoor-style Adaptive Trigger Attack
 
-🚀 주요 기능 (Key Features)
-학습 가능한 트리거 (Learnable Trigger): 고정된 이미지가 아닌, 모델의 취약점을 파고들도록 역전파(Backpropagation)를 통해 진화하는 텐서(Tensor) 기반 트리거 패치 생성.
+Flower 기반 Federated Learning 환경에서 YOLOv8 객체 탐지 모델을 학습하고, LISA traffic light dataset에 대해 AnywhereDoor-style adaptive trigger backdoor attack을 실험하기 위한 프로젝트입니다.
 
-교대 최적화 (2-Phase Alternating Optimization): 1. 모델 가중치 고정 & 트리거 최적화
-2. 트리거 고정 & 모델 가중치 오염
+현재 구현은 **YOLOv8 + Flower + LISA dataset + generator-based adaptive trigger** 구조를 사용합니다. 공격은 `G_phi` generator를 이용해 trigger noise를 생성하고, 공격 client에서 source class label을 target class label로 변경하는 targeted misclassification 형태로 동작합니다.
 
-알파 블렌딩 (Alpha Blending): 트리거를 원본 이미지에 반투명하게(Alpha=0.5) 합성하여 시각적 은밀성(Stealthiness) 확보.
+> 현재 코드 기준 주의사항  
+> 이 구현은 논문 AnywhereDoor의 전체 multi-target/multi-object setting을 완전히 재현한 구현이라기보다는, **고정 source-target class pair 기반의 single-pair targeted misclassification 실험**에 가깝습니다.  
+> 기본 설정은 `fixed-source-class = 0`, `fixed-target-class = 1`입니다.
 
-SOTA 백도어 평가 (Strict ASR Evaluation): 글로벌 서버 평가 시 단순히 오탐지 여부만 확인하는 것이 아니라, Confidence ≥ 0.5 및 가짜 박스와 트리거 간의 IoU ≥ 0.3 조건을 통과해야만 공격 성공(ASR)으로 인정하는 엄격한 프로토콜 적용.
+---
 
-데이터 물리적 격리 (Symlink Data Isolation): FL 환경에서 여러 클라이언트가 YOLO 캐시(train.cache)를 공유하다 충돌하는 현상(Race Condition)을 막기 위해, 가상 링크 기반의 완벽한 샌드박스 데이터셋 자동 생성.
+## 1. Project Overview
 
-동적 학습률 제어 (Global LR Decay): 짧은 FL 로컬 에폭(3 Epoch)의 한계를 극복하기 위해, 서버 라운드에 비례하여 지수 감쇠(Exponential Decay)하는 학습률 스케줄러 자체 구현.
+이 프로젝트의 목적은 다음과 같습니다.
 
-📁 디렉토리 구조 (Repository Structure)
-Plaintext
+- Flower 기반 Federated Learning 환경에서 YOLOv8 객체 탐지 모델 학습
+- LISA traffic light dataset을 client partition 형태로 분할하여 FL 학습 수행
+- 공격 client에서 adaptive trigger generator `G_phi`를 이용한 backdoor poisoning 수행
+- 서버 측 global evaluation으로 매 round마다 clean mAP50, Precision, Recall, F1, ASR 기록
+- Round별 global metrics를 CSV로 저장
+- 공격 client의 label flip 수와 attacker 참여 수를 기록
+
+---
+
+## 2. Main Features
+
+### Federated Learning
+
+- Flower `ServerApp`, `ClientApp` 기반 구조
+- `flwr run .` 방식 실행 지원
+- `pyproject.toml` 기반 실험 설정 관리
+- FedAvg aggregation 사용
+- client별 local YOLO training 수행
+- 서버에서 round별 global model evaluation 수행
+
+### YOLOv8 Object Detection
+
+- Ultralytics YOLOv8 사용
+- custom 3-class detector 설정
+- LISA dataset 기준 class 구성
+  - `go`
+  - `stop`
+  - `warning`
+
+### AnywhereDoor-style Backdoor Attack
+
+- attacker client에서만 poisoning 수행
+- `AnywhereDoorGenerator`를 통해 trigger pattern 생성
+- source class와 target class one-hot vector를 generator 입력으로 사용
+- image 전체에 mosaicked trigger noise 적용
+- targeted misclassification 방식으로 label 변경
+- generator `G_phi`를 각 attacker client에서 local update 후 서버에서 평균 aggregation
+
+### Metrics Logging
+
+서버는 매 round마다 다음 지표를 CSV로 저장합니다.
+
+- `Round`
+- `mAP50`
+- `F1_Score`
+- `Precision`
+- `Recall`
+- `ASR_Miscls_Avg`
+- `ASR_Removal_Avg`
+- `Active_ASR`
+- `Miscls_Targets`
+- `Removal_Targets`
+- `Num_Attackers`
+- `Total_Label_Changed`
+
+---
+
+## 3. Repository Structure
+
+예상 프로젝트 구조는 다음과 같습니다.
+
+```text
 flwr_yolov8_lisa_template/
-├── pyproject.toml             # Flower 실행 환경, 하드웨어 할당 및 공격 파라미터 제어 센터
-├── split.py                   # 캐시 충돌 방지용 가상 데이터셋(Symlink) 분할 스크립트
 ├── fl_yolo_backdoor/
 │   ├── __init__.py
-│   ├── client_app.py          # FL 클라이언트: YOLOv8 훈련, 동적 LR, 증강 제어
-│   ├── server_app.py          # FL 서버: FedAvg 병합, 글로벌 mAP 및 ASR 평가, CSV 로깅
-│   └── custom_trainer.py      # AnywhereDoor 백도어 공격 로직 (트리거 생성 및 교대 훈련)
-└── datas/
-    └── lisa_yolo/             # 원본 데이터셋 (go, stop, warning 3개 클래스)
-⚙️ 요구 사항 (Prerequisites)
-이 프로젝트는 다중 GPU 또는 다중 코어 CPU를 활용한 병렬 시뮬레이션(Ray)을 지원합니다.
+│   ├── client_app.py
+│   ├── server_app.py
+│   └── custom_trainer.py
+├── datas/
+│   └── lisa_yolo/
+│       ├── data.yaml
+│       ├── images/
+│       ├── labels/
+│       └── client_isolated_100/
+│           ├── client_0/
+│           │   └── data.yaml
+│           ├── client_1/
+│           │   └── data.yaml
+│           └── ...
+├── pyproject.toml
+├── yolov8n_custom.yaml
+├── README.md
+└── fl_logs/
+```
 
-Bash
-pip install flwr>=1.12.0 ultralytics>=8.0.0 torch torchvision opencv-python
-🎯 공격 파라미터 설정 (Configuration)
-모든 시뮬레이션 및 백도어 공격 설정은 pyproject.toml 파일에서 중앙 집중식으로 관리됩니다.
+### Core files
 
-Ini, TOML
+| File                                                        | Description                                                  |
+| ----------------------------------------------------------- | ------------------------------------------------------------ |
+| `pyproject.toml`                                            | Flower app 설정 및 실험 hyperparameter 관리                  |
+| `fl_yolo_backdoor/client_app.py`                            | Flower client 구현, local YOLO 학습, attacker client 설정    |
+| `fl_yolo_backdoor/server_app.py`                            | Flower server 구현, FedAvg, global evaluation, ASR 측정, CSV 저장 |
+| `fl_yolo_backdoor/custom_trainer.py`                        | YOLO custom trainer, adaptive trigger injection, generator optimization |
+| `yolov8n_custom.yaml`                                       | YOLOv8 custom 3-class model config                           |
+| `datas/lisa_yolo/data.yaml`                                 | global validation dataset config                             |
+| `datas/lisa_yolo/client_isolated_100/client_{id}/data.yaml` | client별 local dataset config                                |
+
+---
+
+## 4. Environment
+
+현재 실행 로그 기준 환경 예시는 다음과 같습니다.
+
+```text
+Python       3.10
+Flower       >= 1.12.0
+Ultralytics  8.4.14
+PyTorch      2.5.1+cu121
+CUDA         12.1
+GPU          NVIDIA GeForce RTX 2080 Ti
+```
+
+`pyproject.toml`의 dependency 예시는 다음과 같습니다.
+
+```toml
+dependencies = [
+    "flwr>=1.12.0",
+    "ultralytics>=8.0.0",
+    "torch>=2.0.0",
+    "torchvision",
+    "opencv-python",
+    "pyyaml"
+]
+```
+
+---
+
+## 5. Installation
+
+Conda 환경 예시입니다.
+
+```bash
+conda create -n fl_yolo8 python=3.10 -y
+conda activate fl_yolo8
+```
+
+필요 패키지를 설치합니다.
+
+```bash
+pip install -U pip
+pip install flwr ultralytics torch torchvision opencv-python pyyaml
+```
+
+프로젝트 루트에서 editable install이 필요하면 다음을 실행합니다.
+
+```bash
+pip install -e .
+```
+
+---
+
+## 6. Dataset Preparation
+
+이 프로젝트는 LISA traffic light dataset을 YOLO format으로 변환한 구조를 전제로 합니다.
+
+기본 global validation config는 다음 경로를 사용합니다.
+
+```text
+datas/lisa_yolo/data.yaml
+```
+
+client별 partition은 다음 구조를 기대합니다.
+
+```text
+datas/lisa_yolo/client_isolated_100/client_0/data.yaml
+datas/lisa_yolo/client_isolated_100/client_1/data.yaml
+...
+datas/lisa_yolo/client_isolated_100/client_99/data.yaml
+```
+
+각 client의 `data.yaml`은 해당 client의 local train set을 가리켜야 하며, global validation은 서버 평가에서 `datas/lisa_yolo/data.yaml`을 사용합니다.
+
+---
+
+## 7. Configuration
+
+주요 설정은 `pyproject.toml`의 `[tool.flwr.app.config]`에 정의합니다.
+
+현재 실험 설정 예시는 다음과 같습니다.
+
+```toml
 [tool.flwr.app.config]
-num-server-rounds = 50       # 총 연합학습 라운드 수
-local-epochs = 3             # 클라이언트 당 로컬 학습 에폭
-total-clients = 10           # 전체 클라이언트 수
+num-server-rounds = 50
+local-epochs = 2
+total-clients = 100
+fraction-fit = 0.2
 
-# AnywhereDoor Backdoor Configurations
-attack-flag = true           # 공격 활성화 여부 (true/false)
-attacker-ratio = 0.2         # 전체 클라이언트 중 악의적 노드(스파이)의 비율 (예: 20%)
-poison-rate = 0.5            # 공격자의 로컬 데이터 중 오염시킬 데이터의 비율
-trigger-size = 32            # 트리거 패치 크기 (픽셀 단위, 예: 32x32)
-target-class = 0             # 모델을 속여 인식하게 만들 목표 타겟 클래스 (0: go)
-🏃‍♂️ 실행 방법 (How to Run)
-Step 1: 데이터 분할 및 격리 환경 구성
-연합학습을 시작하기 전, 반드시 아래 스크립트를 실행하여 클라이언트별 가상 데이터 폴더(client_isolated_N)를 생성해야 합니다.
+reset-global-generator = true
 
-Bash
-python split.py
-Step 2: 연합학습 시뮬레이션 시작
-Flower 1.12+의 최신 실행 문법을 사용하여 pyproject.toml에 정의된 local-sim 환경(클라이언트당 CPU 4, GPU 1 할당)으로 시뮬레이션을 시작합니다.
+attack-flag = true
+attacker-ratio = 0.5
+poison-rate = 0.5
+trigger-size = 32
+num-classes = 3
 
-Bash
-flwr run .
-📊 결과 로그 및 평가 지표 (Evaluation Metrics)
-시뮬레이션이 진행됨에 따라 fl_logs/server_YYYYMMDD_HHMMSS/global_metrics.csv 파일이 생성되며, 매 라운드 다음 지표가 기록됩니다.
+eval-attack-mode = "targeted_miscls"
 
-mAP50: 기본 탐지 성능 (Clean Accuracy 유지 여부 확인)
+fixed-source-class = 0
+fixed-target-class = 1
 
-F1_Score / Precision / Recall: 정밀도 및 재현율 기반 척도
+epsilon = 0.10
+generator-lr = 0.01
+trigger-inner-steps = 1
 
-ASR (Attack Success Rate): 공격 성공률. 목표한 위치(트리거 부착점)에 타겟 클래스의 바운딩 박스가 정확히 생성되었는지를 측정합니다.
+asr-conf-thresh = 0.1
+asr-max-pairs = 6
+asr-num-samples = 100
+asr-seed = 2026
+```
 
-📝 References
-AnywhereDoor: A Stealthy and Adaptive Backdoor Attack in Object Detection
+### Important Parameters
 
-Flower: A Friendly Federated Learning Framework
+| Parameter             | Meaning                                             |
+| --------------------- | --------------------------------------------------- |
+| `num-server-rounds`   | FL server aggregation round 수                      |
+| `local-epochs`        | client local training epoch 수                      |
+| `total-clients`       | 전체 client 수                                      |
+| `fraction-fit`        | round마다 fit에 참여할 client 비율                  |
+| `attack-flag`         | backdoor attack 활성화 여부                         |
+| `attacker-ratio`      | 전체 client 중 attacker로 동작할 확률               |
+| `poison-rate`         | attacker client 내부에서 image/batch poisoning 확률 |
+| `trigger-size`        | trigger patch 크기                                  |
+| `epsilon`             | image에 추가되는 trigger noise 강도                 |
+| `generator-lr`        | trigger generator optimizer learning rate           |
+| `trigger-inner-steps` | batch마다 generator를 최적화하는 inner step 수      |
+| `fixed-source-class`  | 공격 source class                                   |
+| `fixed-target-class`  | 공격 target class                                   |
+| `eval-attack-mode`    | 현재 `targeted_miscls` 사용                         |
+| `asr-conf-thresh`     | ASR 측정 시 YOLO prediction confidence threshold    |
+| `asr-num-samples`     | ASR 측정에 사용할 validation image sample 수        |
 
-Ultralytics YOLOv8
+---
+
+## 8. Running Experiments
+
+프로젝트 루트에서 다음 명령으로 실행합니다.
+
+```bash
+flwr run . --stream
+```
+
+설정을 command line에서 덮어쓰려면 다음과 같이 실행할 수 있습니다.
+
+```bash
+flwr run . --stream --run-config "num-server-rounds=10 local-epochs=2 fraction-fit=0.2 attack-flag=true attacker-ratio=0.5 poison-rate=0.5 trigger-size=32"
+```
+
+---
+
+## 9. Output and Logs
+
+기본 로그 디렉터리는 다음 경로입니다.
+
+```text
+/home/flba/project/flwr_yolov8_lisa_template/fl_logs
+```
+
+환경변수로 변경할 수 있습니다.
+
+```bash
+export FL_LOG_ROOT=/path/to/fl_logs
+```
+
+### Server logs
+
+서버는 실행 시점별 디렉터리를 생성합니다.
+
+```text
+fl_logs/server_YYYYMMDD_HHMMSS/
+└── global_metrics.csv
+```
+
+### Client logs
+
+각 client는 node id와 process id 기반 디렉터리를 생성합니다.
+
+```text
+fl_logs/client_node{node_id}_pid{pid}/
+├── global_model.pt
+├── generator_round_{round}.pt
+└── train/
+    └── weights/
+        ├── last.pt
+        └── best.pt
+```
+
+---
+
+## 10. Global Metrics CSV Naming Rule
+
+실험 결과 CSV는 다음 규칙으로 정리할 수 있습니다.
+
+```text
+{version}_{clients&fraction}_{attack_method}_{poison_rate}_{patch_size}.csv
+```
+
+현재 설정 기준 예시는 다음과 같습니다.
+
+```text
+3.6.0_10020_AnywhereDoor_pr0.5_32.csv
+```
+
+구성은 다음과 같습니다.
+
+| Component        | Value                                         |
+| ---------------- | --------------------------------------------- |
+| version          | `3.6.0`                                       |
+| clients&fraction | `10020` = total clients 100, fraction-fit 0.2 |
+| attack_method    | `AnywhereDoor`                                |
+| poison_rate      | `pr0.5`                                       |
+| patch_size       | `32`                                          |
+
+예시 rename command:
+
+```bash
+mv global_metrics.csv 3.6.0_10020_AnywhereDoor_pr0.5_32.csv
+```
+
+---
+
+## 11. Attack Logic
+
+### 11.1 Generator
+
+`AnywhereDoorGenerator`는 source class와 target class one-hot vector를 입력받아 trigger patch를 생성합니다.
+
+```text
+G_phi(e_r, e_g) -> trigger patch
+```
+
+현재 구현에서는 두 개의 branch를 사용합니다.
+
+- `G_r`: source/removal branch
+- `G_g`: target/misclassification branch
+
+출력 trigger는 image 전체에 tile 형태로 반복 적용됩니다.
+
+### 11.2 Poisoning
+
+attacker client의 training batch에서 다음 조건을 만족하면 poisoning을 수행합니다.
+
+- 현재 client가 attacker임
+- `attack-flag = true`
+- image 내에 `fixed-source-class` 객체가 존재함
+- random sampling이 `poison-rate` 조건을 만족함
+
+targeted misclassification의 경우 source class label을 target class label로 변경합니다.
+
+```text
+source class 0 -> target class 1
+```
+
+현재 기본 class mapping 기준으로는 다음 공격입니다.
+
+```text
+go -> stop
+```
+
+### 11.3 Generator Optimization
+
+각 poisoned batch에 대해 generator는 inner optimization을 수행합니다.
+
+```text
+trigger-inner-steps = 1
+```
+
+동작 개요:
+
+1. batch 복제
+2. trigger injection
+3. detector model parameter freeze
+4. generator만 gradient update
+5. detach된 trigger로 최종 poisoned batch 생성
+6. detector local training 진행
+
+---
+
+## 12. ASR Evaluation
+
+서버는 global model 평가 후 다음 순서로 ASR을 측정합니다.
+
+1. round별 attacker client들이 저장한 `generator_round_{round}.pt` 수집
+2. generator weight 평균화
+3. global `G_phi` 저장
+4. validation images sampling
+5. clean image prediction 수행
+6. source class prediction이 존재하는 box를 기준으로 target class 전환 여부 측정
+
+현재 ASR은 GT annotation 기준이 아니라 **clean prediction 기준**입니다.
+
+따라서 초반 round에서 model이 source class를 거의 탐지하지 못하면 ASR 분모가 0이 되어 ASR이 0으로 기록될 수 있습니다.
+

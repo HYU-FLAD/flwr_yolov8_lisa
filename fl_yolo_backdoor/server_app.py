@@ -4,146 +4,311 @@ import glob
 import cv2
 import torch
 import random
+import yaml
 import numpy as np
 from datetime import datetime
 from collections import OrderedDict
-from typing import Dict, List, Optional, Tuple
-
+from pathlib import Path
+from typing import Dict, Optional, Tuple, List
 from flwr.server import ServerApp, ServerConfig, ServerAppComponents
 from flwr.server.strategy import FedAvg
-from flwr.common import Context, NDArrays, Scalar
+from flwr.common import Context, NDArrays, Scalar, Metrics
 from ultralytics import YOLO
 
+from fl_yolo_backdoor.custom_trainer import AnywhereDoorGenerator
+
+FL_LOG_ROOT = os.environ.get("FL_LOG_ROOT", "/home/flba/project/flwr_yolov8_lisa_template/fl_logs")
+os.makedirs(FL_LOG_ROOT, exist_ok=True)
+GLOBAL_GEN_PATH = os.path.join(FL_LOG_ROOT, "global_generator.pt")
+
+_CLEANED = False
+
+def init_global_generator_once(patch_size=32, nc=3, reset=False):
+    global _CLEANED
+    if _CLEANED: return
+    
+    if reset and os.path.exists(GLOBAL_GEN_PATH):
+        print("[DEBUG][SERVER] reset-global-generator=true. Removing old GLOBAL G_phi.")
+        os.remove(GLOBAL_GEN_PATH)
+    
+    expected_sd = AnywhereDoorGenerator(num_classes=nc, patch_size=patch_size).state_dict()
+
+    if os.path.exists(GLOBAL_GEN_PATH):
+        try: current_sd = torch.load(GLOBAL_GEN_PATH, map_location="cpu", weights_only=True)
+        except TypeError: current_sd = torch.load(GLOBAL_GEN_PATH, map_location="cpu")
+
+        valid = (set(current_sd.keys()) == set(expected_sd.keys()) and
+                 all(current_sd[k].shape == expected_sd[k].shape for k in expected_sd.keys()))
+
+        if valid:
+            print("[DEBUG][SERVER] Reusing valid GLOBAL G_phi.")
+        else:
+            print("[WARN][SERVER] Existing G_phi shape mismatch. Reinitializing.")
+            os.remove(GLOBAL_GEN_PATH)
+
+    for f in glob.glob(os.path.join(FL_LOG_ROOT, "client_*", "generator_round_*.pt")):
+        try: os.remove(f)
+        except: pass
+
+    if not os.path.exists(GLOBAL_GEN_PATH):
+        print("[DEBUG][SERVER] Creating initial G_phi...")
+        gen = AnywhereDoorGenerator(num_classes=nc, patch_size=patch_size)
+        torch.save(gen.state_dict(), GLOBAL_GEN_PATH)
+    _CLEANED = True
+
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-log_dir = f"fl_logs/server_{timestamp}"
+log_dir = os.path.join(FL_LOG_ROOT, f"server_{timestamp}")
 os.makedirs(log_dir, exist_ok=True)
 csv_path = os.path.join(log_dir, "global_metrics.csv")
 
-# [수정] CSV 헤더에 F1, Precision, Recall 추가
 with open(csv_path, mode='w', newline='') as file:
     writer = csv.writer(file)
-    writer.writerow(["Round", "mAP50", "F1_Score", "Precision", "Recall", "ASR"])
+    writer.writerow([
+        "Round", "mAP50", "F1_Score", "Precision", "Recall", 
+        "ASR_Miscls_Avg", "ASR_Removal_Avg", "Active_ASR", "Miscls_Targets", "Removal_Targets", 
+        "Num_Attackers", "Total_Label_Changed"
+    ])
 
-def measure_global_asr(model: YOLO, attack_config: dict, num_samples: int = 30) -> float:
-    val_dir = "datas/lisa_yolo/images/val"
-    val_images = list(glob.glob(val_dir + "/*.jpg"))
-    if not val_images: return 0.0
-    
-    samples = random.sample(val_images, min(num_samples, len(val_images)))
-    success_count = 0
-    patch_size = attack_config.get("trigger-size", 40)
-    target_class = attack_config.get("target-class", 0)
-    
-    trigger_files = glob.glob("fl_logs/client_*/trigger_patch.pt")
-    if not trigger_files: return 0.0 
-    
-    trigger_tensor = torch.load(trigger_files[0], map_location="cpu").numpy()
-    trigger_img = (np.clip(trigger_tensor, 0, 1).transpose(1, 2, 0) * 255).astype(np.uint8)
+def calculate_iou(box1, box2):
+    x1, y1 = max(box1[0], box2[0]), max(box1[1], box2[1])
+    x2, y2 = min(box1[2], box2[2]), min(box1[3], box2[3])
+    inter = max(0, x2 - x1) * max(0, y2 - y1)
+    box1_area = max(0, box1[2] - box1[0]) * max(0, box1[3] - box1[1])
+    box2_area = max(0, box2[2] - box2[0]) * max(0, box2[3] - box2[1])
+    union = box1_area + box2_area - inter
+    return inter / (union + 1e-6)
 
-    for img_path in samples:
-        img = cv2.imread(img_path)
-        h, w = img.shape[:2]
+def collect_val_images(data_yaml="datas/lisa_yolo/data.yaml"):
+    try:
+        with open(data_yaml, "r") as f: data_cfg = yaml.safe_load(f)
+        yaml_dir = Path(data_yaml).parent
+        root = Path(data_cfg.get("path", yaml_dir))
+        if not root.is_absolute(): root = yaml_dir / root
         
-        x = random.randint(0, w - patch_size)
-        y = random.randint(0, h - patch_size)
-        img[y:y+patch_size, x:x+patch_size] = trigger_img
+        val_raw = data_cfg["val"]
+        val_path = Path(val_raw)
+        if not val_path.is_absolute(): val_path = root / val_path
         
-        results = model.predict(img, verbose=False)
-        boxes = results[0].boxes
+        exts = {".jpg", ".jpeg", ".png", ".bmp"}
+        images = []
         
-        is_success = False
-        for box in boxes:
-            if int(box.cls[0]) == target_class:
-                bx1, by1, bx2, by2 = box.xyxy[0].tolist()
-                cx, cy = (bx1 + bx2)/2, (by1 + by2)/2
-                if x <= cx <= x + patch_size and y <= cy <= y + patch_size:
-                    is_success = True
-                    break
-        if is_success:
-            success_count += 1
+        if val_path.is_file():
+            if val_path.suffix.lower() in exts: images.append(str(val_path))
+            else:
+                with open(val_path, "r") as f:
+                    for line in f:
+                        p = Path(line.strip())
+                        if not p.is_absolute(): p = root / p
+                        if p.suffix.lower() in exts and p.exists(): images.append(str(p))
+        elif val_path.is_dir():
+            for ext in ["*.jpg", "*.jpeg", "*.png", "*.bmp"]:
+                images.extend(val_path.rglob(ext))
+        else:
+            for p in glob.glob(str(val_path), recursive=True):
+                pp = Path(p)
+                if pp.suffix.lower() in exts: images.append(str(pp))
+                
+        return sorted(list({str(p) for p in images}))
+    except Exception as e:
+        print(f"[WARN] Val images parsing failed: {e}")
+        return []
+
+def sync_global_generator(server_round, patch_size=32, nc=3):
+    gen_files = glob.glob(os.path.join(FL_LOG_ROOT, "client_*", f"generator_round_{server_round}.pt"))
+    print(f"[DEBUG][SERVER] Aggregating G_phi from {len(gen_files)} clients.")
+    if not gen_files: return 0
+
+    expected_sd = AnywhereDoorGenerator(num_classes=nc, patch_size=patch_size).state_dict()
+    valid_states = []
+
+    for f in gen_files:
+        try:
+            try: sd = torch.load(f, map_location="cpu", weights_only=True)
+            except TypeError: sd = torch.load(f, map_location="cpu")
             
-    return success_count / len(samples)
+            valid = (set(sd.keys()) == set(expected_sd.keys()) and 
+                     all(sd[k].shape == expected_sd[k].shape for k in expected_sd.keys()))
+            if valid: valid_states.append(sd)
+            else: print(f"[WARN][SERVER] Invalid generator skipped: {f}")
+        except Exception as e: print(f"[WARN][SERVER] Failed to load generator {f}: {e}")
 
-def get_on_fit_config(server_round: int) -> Dict[str, Scalar]:
-    return {
-        "server_round": server_round,
-        "local_epochs": 3,
+    if not valid_states: return 0
+
+    avg_state = {
+        k: torch.stack([sd[k].float() for sd in valid_states], dim=0).mean(dim=0)
+        for k in expected_sd.keys()
     }
+    torch.save(avg_state, GLOBAL_GEN_PATH)
+    return len(valid_states)
+
+def measure_anywheredoor_asr(model: YOLO, attack_config: dict):
+    val_images = collect_val_images()
+    if not val_images or not os.path.exists(GLOBAL_GEN_PATH): return 0.0, 0.0, 0, 0
+    
+    nc = int(attack_config.get("num-classes", 3))
+    epsilon = float(attack_config.get("epsilon", 0.10))
+    patch_size = int(attack_config.get("trigger-size", 32))
+    conf_thresh = float(attack_config.get("asr-conf-thresh", 0.1))
+    num_samples = int(attack_config.get("asr-num-samples", 100))
+    asr_seed = int(attack_config.get("asr-seed", 2026))
+
+    rng = random.Random(asr_seed)
+
+    gen = AnywhereDoorGenerator(num_classes=nc, patch_size=patch_size)
+    try: gen.load_state_dict(torch.load(GLOBAL_GEN_PATH, map_location="cpu", weights_only=True))
+    except: gen.load_state_dict(torch.load(GLOBAL_GEN_PATH, map_location="cpu"))
+    gen.eval()
+
+    fixed_src = int(attack_config.get("fixed-source-class", 0))
+    fixed_tgt = int(attack_config.get("fixed-target-class", 1))
+
+    # [추가됨] 방어 코드: source와 target이 같으면 에러 발생
+    if fixed_src == fixed_tgt:
+        raise ValueError(f"Invalid ASR pair: {fixed_src}->{fixed_tgt}")
+
+    miscls_pairs = [(fixed_src, fixed_tgt)]
+    
+    total_asr_m, valid_m_pairs = 0.0, 0
+    miscls_targets_cnt = 0
+    
+    # [수정됨] 이번 실험에서 불필요한 Removal ASR 강제 초기화
+    avg_asr_r = 0.0
+    removal_targets_cnt = 0
+
+    samples = rng.sample(val_images, min(num_samples, len(val_images)))
+
+    with torch.no_grad():
+        for src_c, tgt_c in miscls_pairs:
+            e_r_vec, e_g_vec = torch.zeros(nc), torch.zeros(nc)
+            e_r_vec[src_c], e_g_vec[tgt_c] = 1.0, 1.0
+            
+            trigger_tensor_m = gen(e_r_vec.unsqueeze(0), e_g_vec.unsqueeze(0)).squeeze(0) 
+            trigger_tensor_m = 2.0 * torch.sigmoid(trigger_tensor_m).numpy() - 1.0
+            
+            suc_m, tgts_m = 0, 0
+            for img_path in samples:
+                img = cv2.imread(img_path)
+                if img is None: continue
+                img = cv2.resize(img, (640, 640))
+                h, w = 640, 640
+                
+                results_clean = model.predict(img, verbose=False, conf=conf_thresh)
+                if len(results_clean[0].boxes) == 0: continue
+                
+                mosaicked_m = np.tile(trigger_tensor_m.transpose(1, 2, 0), ((h // patch_size) + 1, (w // patch_size) + 1, 1))[:h, :w, :]
+                noise_m = (epsilon * 255 * mosaicked_m[..., ::-1]).astype(np.float32)
+                dirty_img_m = np.clip(img.astype(np.float32) + noise_m, 0, 255).astype(np.uint8)
+                
+                res_m = model.predict(dirty_img_m, verbose=False, conf=conf_thresh)
+                
+                for c_box in results_clean[0].boxes:
+                    if int(c_box.cls[0]) != src_c: continue
+                    tgts_m += 1
+                    c_coords = c_box.xyxy[0].tolist()
+                    for d_box in res_m[0].boxes:
+                        if calculate_iou(c_coords, d_box.xyxy[0].tolist()) > 0.5 and int(d_box.cls[0]) == tgt_c:
+                            suc_m += 1; break
+            
+            if tgts_m > 0:
+                pair_asr = suc_m / tgts_m
+                print(f"[DEBUG][ASR] Pair {src_c}->{tgt_c}: {pair_asr*100:.1f}% ({suc_m}/{tgts_m})")
+                total_asr_m += pair_asr
+                miscls_targets_cnt += tgts_m
+                valid_m_pairs += 1
+
+    avg_asr_m = total_asr_m / valid_m_pairs if valid_m_pairs > 0 else 0.0
+    
+    print(f"[DEBUG][ASR] Valid Pairs: {valid_m_pairs}/{len(miscls_pairs)}")
+    print(f"[DEBUG][ASR] Avg Miscls ASR={avg_asr_m*100:.1f}% (Removal ASR Disabled)")
+    
+    return avg_asr_m, avg_asr_r, miscls_targets_cnt, removal_targets_cnt
+
+def get_on_fit_config_fn(local_epochs: int):
+    def get_on_fit_config(server_round: int) -> Dict[str, Scalar]:
+        print(f"[DEBUG][FIT_CONFIG] round={server_round}, local_epochs={local_epochs}")
+        return {"server_round": server_round, "local_epochs": int(local_epochs)}
+    return get_on_fit_config
+
+_LAST_METRICS = {"num_attackers": 0, "total_lbl_chg": 0}
+def fit_metrics_aggregation_fn(metrics: List[Tuple[int, Metrics]]) -> Metrics:
+    global _LAST_METRICS
+    _LAST_METRICS = {
+        "num_attackers": sum(int(m.get("is_attacker", 0)) for _, m in metrics),
+        "total_lbl_chg": sum(int(m.get("label_changed", 0)) for _, m in metrics)
+    }
+    return {"num_fit_clients": len(metrics)}
+
+def cfg_get(cfg, key, default):
+    val = cfg.get(key, default)
+    return default if val is None else val
 
 def get_evaluate_fn(attack_config):
-    def evaluate(server_round: int, parameters: NDArrays, config: Dict[str, Scalar]) -> Optional[Tuple[float, Dict[str, Scalar]]]:
-        print(f"\n🌐 [Server Round {server_round}] 글로벌 모델 평가 시작...")
-        
+    def evaluate(server_round: int, parameters: NDArrays, config: Dict[str, Scalar]):
+        global _LAST_METRICS
+        print(f"\n🌐 [Server Round {server_round}] 글로벌 모델 평가...")
         server_model = YOLO("yolov8n_custom.yaml")
-        try:
-            server_model.load("yolov8n.pt")
-        except Exception:
-            pass
-
-        server_model.model.eval()
-        dummy_input = torch.zeros((1, 3, 640, 640))
-        _ = server_model.model(dummy_input)
+        try: server_model.load("yolov8n.pt")
+        except: pass
         
-        keys = list(server_model.model.state_dict().keys())
-        state_dict = OrderedDict({
-            k: torch.tensor(v, dtype=server_model.model.state_dict()[k].dtype) 
-            for k, v in zip(keys, parameters)
-        })
-        server_model.model.load_state_dict(state_dict, strict=True)
+        server_model.model.load_state_dict(OrderedDict({k: torch.tensor(v, dtype=server_model.model.state_dict()[k].dtype) for k, v in zip(server_model.model.state_dict().keys(), parameters)}), strict=True)
+        temp_pt = os.path.join(log_dir, f"temp_{server_round}.pt")
+        torch.save({"model": server_model.model.float()}, temp_pt) 
         
-        # Validation 진행
-        metrics = server_model.val(data="datas/lisa_yolo/data.yaml", plots=False, save=False, verbose=False)
+        metrics = YOLO(temp_pt).val(data="datas/lisa_yolo/data.yaml", plots=False, save=False, verbose=False)
+        map50, f1_score = float(metrics.box.map50), 2 * (float(metrics.box.mp) * float(metrics.box.mr)) / (float(metrics.box.mp) + float(metrics.box.mr) + 1e-6)
         
-        # [핵심 수정] 평가지표 추출 및 F1-Score 계산
-        map50 = float(metrics.box.map50)
-        precision = float(metrics.box.mp)
-        recall = float(metrics.box.mr)
+        asr_m, asr_r, tgts_m, tgts_r = 0.0, 0.0, 0, 0
+        if attack_config.get("attack-flag", False) and _LAST_METRICS["num_attackers"] > 0:
+            if sync_global_generator(server_round, attack_config.get("trigger-size", 32), attack_config.get("num-classes", 3)) > 0:
+                asr_m, asr_r, tgts_m, tgts_r = measure_anywheredoor_asr(YOLO(temp_pt), attack_config)
         
-        if (precision + recall) > 0:
-            f1_score = 2 * (precision * recall) / (precision + recall)
-        else:
-            f1_score = 0.0
+        eval_mode = attack_config.get("eval-attack-mode", "targeted_miscls")
+        main_asr = asr_r if eval_mode == "targeted_removal" else asr_m
         
-        asr = 0.0
-        if attack_config.get("attack-flag", False):
-            asr = measure_global_asr(server_model, attack_config)
-            print(f"🎯 [글로벌 ASR] {asr * 100:.2f}%")
-            
-        # CSV 파일에 모든 평가지표 기록
-        with open(csv_path, mode='a', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow([
-                server_round, 
-                round(map50, 4), 
-                round(f1_score, 4), 
-                round(precision, 4), 
-                round(recall, 4), 
-                round(asr, 4)
+        with open(csv_path, 'a', newline='') as f:
+            csv.writer(f).writerow([
+                server_round, round(map50,4), round(f1_score,4), round(float(metrics.box.mp),4), round(float(metrics.box.mr),4), 
+                round(asr_m,4), round(asr_r,4), round(main_asr,4), tgts_m, tgts_r, 
+                _LAST_METRICS["num_attackers"], _LAST_METRICS["total_lbl_chg"]
             ])
-            
-        return 0.0, {"mAP50": map50, "F1": f1_score, "ASR": asr}
+        if os.path.exists(temp_pt): os.remove(temp_pt)
         
+        return float(1.0 - map50), {"mAP50": map50, "ASR": main_asr}
     return evaluate
 
 def server_fn(context: Context):
-    num_rounds = context.run_config.get("num-server-rounds", 50)
+    cfg = context.run_config
     
-    attack_config = {
-        "attack-flag": context.run_config.get("attack-flag", False),
-        "trigger-size": context.run_config.get("trigger-size", 40),
-        "target-class": context.run_config.get("target-class", 0)
+    loc_epochs = cfg_get(cfg, "local-epochs", 2)
+    print(f"[DEBUG][SERVER] run_config={dict(cfg)}")
+    print(f"[DEBUG][SERVER] local-epochs={loc_epochs}")
+    
+    init_global_generator_once(
+        patch_size=cfg_get(cfg, "trigger-size", 32), 
+        nc=cfg_get(cfg, "num-classes", 3),
+        reset=cfg_get(cfg, "reset-global-generator", True)
+    )
+    
+    atk_cfg = {
+        "attack-flag": cfg_get(cfg, "attack-flag", True),
+        "trigger-size": cfg_get(cfg, "trigger-size", 32),
+        "num-classes": cfg_get(cfg, "num-classes", 3),
+        "epsilon": cfg_get(cfg, "epsilon", 0.10),
+        "eval-attack-mode": cfg_get(cfg, "eval-attack-mode", "targeted_miscls"),
+        "asr-conf-thresh": cfg_get(cfg, "asr-conf-thresh", 0.1),
+        "asr-max-pairs": cfg_get(cfg, "asr-max-pairs", 6),
+        "asr-num-samples": cfg_get(cfg, "asr-num-samples", 100),
+        "asr-seed": cfg_get(cfg, "asr-seed", 2026),
+        "fixed-source-class": cfg_get(cfg, "fixed-source-class", 0),
+        "fixed-target-class": cfg_get(cfg, "fixed-target-class", 1),
     }
     
     strategy = FedAvg(
-        fraction_fit=1.0,
-        fraction_evaluate=0.0, 
-        min_fit_clients=2,
-        min_available_clients=2,
-        evaluate_fn=get_evaluate_fn(attack_config),
-        on_fit_config_fn=get_on_fit_config 
+        fraction_fit=cfg_get(cfg, "fraction-fit", 0.2), 
+        evaluate_fn=get_evaluate_fn(atk_cfg), 
+        on_fit_config_fn=get_on_fit_config_fn(loc_epochs), 
+        fit_metrics_aggregation_fn=fit_metrics_aggregation_fn
     )
-
-    config = ServerConfig(num_rounds=num_rounds)
-    return ServerAppComponents(strategy=strategy, config=config)
+    return ServerAppComponents(strategy=strategy, config=ServerConfig(num_rounds=cfg_get(cfg, "num-server-rounds", 3)))
 
 app = ServerApp(server_fn=server_fn)
