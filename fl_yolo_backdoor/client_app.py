@@ -70,7 +70,7 @@ class YOLOBadNetClient(NumPyClient):
 
         if self.is_attacker and self.attack_config.get("attack-flag", False):
             print(f"\n==============================================")
-            print(f"😈 [ATTACKER Node-{self.node_id}] AnywhereDoor 다중 공격 학습 시작 (Round {server_round})")
+            print(f"😈 [ATTACKER Node-{self.node_id}] AnywhereDoor 학습 시작 (Round {server_round})")
             print(f"==============================================\n")
 
         overrides = dict(
@@ -84,11 +84,12 @@ class YOLOBadNetClient(NumPyClient):
         trainer.train()
 
         lbl_chg, poi_batch = 0, 0
+        gen_path = os.path.join(self.client_dir, f"generator_round_{int(server_round)}.pt")
+        
         if self.is_attacker and self.attack_config.get("attack-flag", False):
             lbl_chg = getattr(trainer, 'debug_total_label_changed', 0)
             poi_batch = getattr(trainer, 'debug_total_poisoned_batches', 0)
-            gen_path = os.path.join(self.client_dir, f"generator_round_{int(server_round)}.pt")
-            print(f"[DEBUG][CLIENT] G_phi saved: {os.path.exists(gen_path)} | Label Flipped: {lbl_chg}")
+            print(f"[DEBUG][CLIENT] G_phi saved: {os.path.exists(gen_path)} | Poisoned Batches: {poi_batch} | Label Flipped: {lbl_chg}")
         
         for pt_path in [os.path.join(self.client_dir, "train", "weights", "last.pt")]:
             if os.path.exists(pt_path):
@@ -102,10 +103,24 @@ class YOLOBadNetClient(NumPyClient):
         try: num_examples = len(trainer.train_loader.dataset)
         except Exception: num_examples = count_train_images(self.data_path)
             
-        metrics = {"is_attacker": int(self.is_attacker), "label_changed": lbl_chg, "poisoned_batches": poi_batch}
+        metrics = {
+            "is_attacker": int(self.is_attacker),
+            "label_changed": int(lbl_chg),
+            "poisoned_batches": int(poi_batch),
+            "node_id": str(self.node_id),
+            "gen_path": str(gen_path)
+            if (
+                self.is_attacker
+                and self.attack_config.get("attack-flag", False)
+                and os.path.exists(gen_path)
+            )
+            else "",
+        }
+
         return self.get_parameters(config={}), num_examples, metrics
 
-    def evaluate(self, parameters, config): return 0.0, 1, {}
+    def evaluate(self, parameters, config): 
+        return 0.0, 1, {}
 
 def client_fn(context: Context):
     run_cfg = context.run_config
@@ -123,8 +138,6 @@ def client_fn(context: Context):
         "trigger-inner-steps": cfg_get(run_cfg, "trigger-inner-steps", 1),
         "eval-attack-mode": cfg_get(run_cfg, "eval-attack-mode", "targeted_miscls"),
         "generator-lr": cfg_get(run_cfg, "generator-lr", 0.01),
-        "fixed-source-class": cfg_get(run_cfg, "fixed-source-class", 0),
-        "fixed-target-class": cfg_get(run_cfg, "fixed-target-class", 1),
     }
     
     rng = random.Random(nid)

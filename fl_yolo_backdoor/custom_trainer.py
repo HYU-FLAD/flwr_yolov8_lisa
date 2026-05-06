@@ -89,9 +89,6 @@ class AnywhereDoorTrainer(DetectionTrainer):
 
     def preprocess_batch(self, batch):
         batch = super().preprocess_batch(batch)
-        if not hasattr(self, "_debug_preprocess_printed"):
-            print("[DEBUG] preprocess_batch called (True Adaptive Trigger 최적화)")
-            self._debug_preprocess_printed = True
             
         if not (self.is_attacker and self.attack_config.get("attack-flag", False)): 
             return batch
@@ -134,7 +131,6 @@ class AnywhereDoorTrainer(DetectionTrainer):
                 scalar = val if scalar is None else scalar + val
             return scalar
         if torch.is_tensor(loss): return loss.sum()
-        print(f"[WARN] Non-tensor loss received: {type(loss)}")
         return torch.tensor(float(loss), device=self.device, requires_grad=True)
 
     def _optimize_generator_on_batch(self, base_batch, e_info, mask_info):
@@ -169,6 +165,7 @@ class AnywhereDoorTrainer(DetectionTrainer):
                     loss = self._to_scalar_loss(outputs[0] if isinstance(outputs, tuple) else outputs)
                     loss.backward()
 
+                    # [수정됨] G_phi Gradient 디버깅용 Norm 출력 복구
                     grad_norm = 0.0
                     for p in self.generator.parameters():
                         if p.grad is not None:
@@ -229,28 +226,31 @@ class AnywhereDoorTrainer(DetectionTrainer):
                 keep_indices.append(img_obj_mask.nonzero(as_tuple=True)[0])
                 continue
 
+            # [수정됨] Multi-pair Source-Target 동적 샘플링 적용
             if force_e is not None and force_e[i] is not None:
                 src_c, tgt_c, attack_type = force_e[i]
             else:
                 available_classes = [int(x) for x in cls_long[img_obj_mask].unique().tolist() if 0 <= int(x) < nc]
-                
-                fixed_src = int(self.attack_config.get("fixed-source-class", 0))
-                fixed_tgt = int(self.attack_config.get("fixed-target-class", 1))
-
-                # [추가됨] 방어 코드: source와 target이 같으면 에러 발생
-                if fixed_src == fixed_tgt:
-                    raise ValueError(f"fixed-source-class and fixed-target-class must differ: {fixed_src}")
-
-                if fixed_src not in available_classes:
+                if not available_classes:
                     new_mask.append(False)
                     e_info.append(None)
                     modified_images.append(img_i)
                     keep_indices.append(img_obj_mask.nonzero(as_tuple=True)[0])
                     continue
                 
-                src_c = fixed_src
-                tgt_c = fixed_tgt
-                attack_type = "targeted_miscls"
+                # 배치 이미지 내 존재하는 객체 중 하나를 Source로 선정
+                src_c = self.rng.choice(available_classes)
+                possible_targets = [tgt for tgt in range(nc) if tgt != src_c]
+                if not possible_targets:
+                    new_mask.append(False)
+                    e_info.append(None)
+                    modified_images.append(img_i)
+                    keep_indices.append(img_obj_mask.nonzero(as_tuple=True)[0])
+                    continue
+                
+                # 나머지 클래스 중 랜덤하게 Target 선택
+                tgt_c = self.rng.choice(possible_targets)
+                attack_type = self.attack_config.get("eval-attack-mode", "targeted_miscls")
 
             source_obj_mask = img_obj_mask & (cls_long == src_c)
 

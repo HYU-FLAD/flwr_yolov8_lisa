@@ -42,16 +42,12 @@ num-classes = 3
 
 eval-attack-mode = "targeted_miscls" 
 
-# [단일 타겟 고정 실험]
-fixed-source-class = 0
-fixed-target-class = 1
-
-# 공격 강도 튜닝 파라미터 (Smoke Test 용 완화)
+# 공격 강도 튜닝 파라미터 
 epsilon = 0.10          
 generator-lr = 0.01    
 trigger-inner-steps = 1
 
-# ASR 평가 전용 파라미터
+# ASR 평가 전용 파라미터 (Multi-pair GT Base)
 asr-conf-thresh = 0.1
 asr-max-pairs = 6
 asr-num-samples = 100
