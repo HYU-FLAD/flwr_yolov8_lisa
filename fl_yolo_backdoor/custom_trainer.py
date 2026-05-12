@@ -216,6 +216,7 @@ class AnywhereDoorTrainer(DetectionTrainer):
         
         poison_rate = float(self.attack_config.get("poison-rate", 0.7))
         epsilon = float(self.attack_config.get("epsilon", 0.10))
+        attack_type = self.attack_config.get("eval-attack-mode", "targeted_miscls")
         
         nc = int(self.attack_config.get("num-classes", 2))
         if self.generator is not None:
@@ -246,7 +247,7 @@ class AnywhereDoorTrainer(DetectionTrainer):
                 continue
 
             if force_e is not None and force_e[i] is not None:
-                src_c, tgt_c, attack_type = force_e[i]
+                src_c, tgt_c, current_attack_type = force_e[i]
             else:
                 available_classes = [int(x) for x in cls_long[img_obj_mask].unique().tolist() if 0 <= int(x) < nc]
                 if not available_classes:
@@ -256,29 +257,25 @@ class AnywhereDoorTrainer(DetectionTrainer):
                     keep_indices.append(img_obj_mask.nonzero(as_tuple=True)[0])
                     continue
                 
-                if fixed_src is not None and fixed_tgt is not None:
+                if fixed_src is not None:
                     src_c = int(fixed_src)
-                    tgt_c = int(fixed_tgt)
-                    
-                    if src_c == tgt_c or src_c not in available_classes:
+                    if src_c not in available_classes:
                         new_mask.append(False)
                         e_info.append(None)
                         modified_images.append(img_i)
                         keep_indices.append(img_obj_mask.nonzero(as_tuple=True)[0])
                         continue
-                    attack_type = self.attack_config.get("eval-attack-mode", "targeted_miscls")
+                    
+                    if attack_type == "targeted_miscls":
+                        tgt_c = int(fixed_tgt) if fixed_tgt is not None else (src_c + 1) % nc
+                    else:
+                        tgt_c = -1
+                    current_attack_type = attack_type
                 else:
                     src_c = self.rng.choice(available_classes)
                     possible_targets = [tgt for tgt in range(nc) if tgt != src_c]
-                    if not possible_targets:
-                        new_mask.append(False)
-                        e_info.append(None)
-                        modified_images.append(img_i)
-                        keep_indices.append(img_obj_mask.nonzero(as_tuple=True)[0])
-                        continue
-                    
-                    tgt_c = self.rng.choice(possible_targets)
-                    attack_type = self.attack_config.get("eval-attack-mode", "targeted_miscls")
+                    tgt_c = self.rng.choice(possible_targets) if possible_targets else -1
+                    current_attack_type = attack_type
 
             source_obj_mask = img_obj_mask & (cls_long == src_c)
 
@@ -290,7 +287,7 @@ class AnywhereDoorTrainer(DetectionTrainer):
                 continue
 
             new_mask.append(True)
-            e_info.append((src_c, tgt_c, attack_type))
+            e_info.append((src_c, tgt_c, current_attack_type))
             selected += 1
             is_poisoned = True
 
@@ -298,7 +295,7 @@ class AnywhereDoorTrainer(DetectionTrainer):
             e_g_vec = torch.zeros(nc, device=self.device)
             
             e_r_vec[src_c] = 1.0 
-            if attack_type == "targeted_miscls":
+            if current_attack_type == "targeted_miscls":
                 e_g_vec[tgt_c] = 1.0 
 
             trigger_patch = self.generator(e_r_vec.unsqueeze(0), e_g_vec.unsqueeze(0)).squeeze(0)
@@ -311,11 +308,11 @@ class AnywhereDoorTrainer(DetectionTrainer):
             if detach_trigger: trigger_noise = trigger_noise.detach()
             modified_images.append(torch.clamp(img_i + trigger_noise, 0.0, 1.0))
 
-            if attack_type == "targeted_miscls":
+            if current_attack_type == "targeted_miscls":
                 cls_view[source_obj_mask] = float(tgt_c)
                 lbl_chg += int(source_obj_mask.sum().item())
                 keep_indices.append(img_obj_mask.nonzero(as_tuple=True)[0])
-            elif attack_type == "targeted_removal":
+            elif current_attack_type == "targeted_removal":
                 lbl_chg += int(source_obj_mask.sum().item())
                 keep_indices.append((img_obj_mask & ~source_obj_mask).nonzero(as_tuple=True)[0])
 

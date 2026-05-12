@@ -215,7 +215,6 @@ class FlowerYoloClient(NumPyClient):
             "poisoned_batches": int(getattr(trainer, "debug_total_poisoned_batches", 0))
         }
         
-        # [수정 1] float32 타입으로 강제 변환하여 반환
         updated_params = [
             val.detach().cpu().numpy().astype(np.float32)
             for val in after_state.values()
@@ -237,7 +236,6 @@ def client_fn(context: Context):
     fixed_src = cfg_get(run_cfg, "fixed-source-class", None)
     fixed_tgt = cfg_get(run_cfg, "fixed-target-class", None)
 
-    # [수정 2] "seed" 값을 노드 고유 ID(nid)로 할당
     attack_cfg = {
         "seed": int(nid),
         "attack-flag": cfg_get(run_cfg, "attack-flag", False),
@@ -252,6 +250,7 @@ def client_fn(context: Context):
         "fixed-source-class": None if fixed_src is None else int(fixed_src),
         "fixed-target-class": None if fixed_tgt is None else int(fixed_tgt),
         "eval-attack-mode": cfg_get(run_cfg, "eval-attack-mode", "targeted_miscls"),
+        "removal-strict": cfg_get(run_cfg, "removal-strict", True), # [추가됨] Removal 호환성 동기화
     }
     
     print(

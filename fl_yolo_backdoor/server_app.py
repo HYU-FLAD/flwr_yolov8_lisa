@@ -5,6 +5,7 @@ import cv2
 import torch
 import random
 import yaml
+import shutil
 import numpy as np
 from datetime import datetime
 from collections import OrderedDict
@@ -22,8 +23,7 @@ os.makedirs(FL_LOG_ROOT, exist_ok=True)
 GLOBAL_GEN_PATH = os.path.join(FL_LOG_ROOT, "global_generator.pt")
 
 _CLEANED = False
-_BEST_MAP50 = -1.0
-_BEST_ROUND = -1
+_BEST_MAP = 0.0  # [수정] Best Model 추적을 위한 전역 변수 추가
 
 def init_global_generator_once(patch_size=32, nc=2, reset=False):
     global _CLEANED
@@ -172,6 +172,8 @@ def measure_anywheredoor_asr(model: YOLO, attack_config: dict):
     num_samples = int(attack_config.get("asr-num-samples", 100))
     asr_seed = int(attack_config.get("asr-seed", 2026))
     max_pairs = int(attack_config.get("asr-max-pairs", 6))
+    eval_mode = attack_config.get("eval-attack-mode", "targeted_miscls")
+    removal_strict = bool(attack_config.get("removal-strict", True))
 
     rng = random.Random(asr_seed)
 
@@ -183,28 +185,35 @@ def measure_anywheredoor_asr(model: YOLO, attack_config: dict):
     fixed_src = attack_config.get("fixed-source-class", None)
     fixed_tgt = attack_config.get("fixed-target-class", None)
 
-    if fixed_src is not None and fixed_tgt is not None:
-        miscls_pairs = [(int(fixed_src), int(fixed_tgt))]
+    if eval_mode == "targeted_removal":
+        if fixed_src is not None:
+            eval_pairs = [(int(fixed_src), -1)]
+        else:
+            eval_pairs = [(src, -1) for src in range(nc)][:max_pairs]
     else:
-        all_possible = [(s, t) for s in range(nc) for t in range(nc) if s != t]
-        rng.shuffle(all_possible)
-        miscls_pairs = all_possible[:max_pairs]
+        if fixed_src is not None and fixed_tgt is not None:
+            eval_pairs = [(int(fixed_src), int(fixed_tgt))]
+        else:
+            all_possible = [(s, t) for s in range(nc) for t in range(nc) if s != t]
+            rng.shuffle(all_possible)
+            eval_pairs = all_possible[:max_pairs]
     
-    total_asr_m, valid_m_pairs = 0.0, 0
-    miscls_targets_cnt = 0
-    avg_asr_r, removal_targets_cnt = 0.0, 0
+    total_asr_m, valid_m_pairs, miscls_targets_cnt = 0.0, 0, 0
+    total_asr_r, valid_r_pairs, removal_targets_cnt = 0.0, 0, 0
 
     samples = rng.sample(val_images, min(num_samples, len(val_images)))
 
     with torch.no_grad():
-        for src_c, tgt_c in miscls_pairs:
+        for src_c, tgt_c in eval_pairs:
             e_r_vec, e_g_vec = torch.zeros(nc), torch.zeros(nc)
-            e_r_vec[src_c], e_g_vec[tgt_c] = 1.0, 1.0
+            e_r_vec[src_c] = 1.0
+            if eval_mode == "targeted_miscls":
+                e_g_vec[tgt_c] = 1.0
             
-            trigger_tensor_m = gen(e_r_vec.unsqueeze(0), e_g_vec.unsqueeze(0)).squeeze(0) 
-            trigger_tensor_m = 2.0 * torch.sigmoid(trigger_tensor_m).numpy() - 1.0
+            trigger_tensor = gen(e_r_vec.unsqueeze(0), e_g_vec.unsqueeze(0)).squeeze(0) 
+            trigger_tensor = 2.0 * torch.sigmoid(trigger_tensor).numpy() - 1.0
             
-            suc_m, tgts_m = 0, 0
+            success, targets = 0, 0
             for img_path in samples:
                 label_path = str(img_path).replace('images', 'labels').rsplit('.', 1)[0] + '.txt'
                 if not os.path.exists(label_path): continue
@@ -230,29 +239,51 @@ def measure_anywheredoor_asr(model: YOLO, attack_config: dict):
                                 
                 if not gt_boxes: continue 
                 
-                mosaicked_m = np.tile(trigger_tensor_m.transpose(1, 2, 0), ((h // patch_size) + 1, (w // patch_size) + 1, 1))[:h, :w, :]
-                noise_m = (epsilon * 255 * mosaicked_m[..., ::-1]).astype(np.float32)
-                dirty_img_m = np.clip(img.astype(np.float32) + noise_m, 0, 255).astype(np.uint8)
+                mosaicked = np.tile(trigger_tensor.transpose(1, 2, 0), ((h // patch_size) + 1, (w // patch_size) + 1, 1))[:h, :w, :]
+                noise = (epsilon * 255 * mosaicked[..., ::-1]).astype(np.float32)
+                dirty_img = np.clip(img.astype(np.float32) + noise, 0, 255).astype(np.uint8)
                 
-                res_m = model.predict(dirty_img_m, verbose=False, conf=conf_thresh)
-                
-                tgts_m += len(gt_boxes)
+                res = model.predict(dirty_img, verbose=False, conf=conf_thresh)
+                boxes = res[0].boxes
+                targets += len(gt_boxes)
+
                 for gt_box in gt_boxes:
-                    for d_box in res_m[0].boxes:
-                        if calculate_iou(gt_box, d_box.xyxy[0].tolist()) > 0.5 and int(d_box.cls[0]) == tgt_c:
-                            suc_m += 1; break
+                    if eval_mode == "targeted_miscls":
+                        matched_target = False
+                        for d_box in boxes:
+                            if calculate_iou(gt_box, d_box.xyxy[0].tolist()) > 0.5 and int(d_box.cls[0]) == tgt_c:
+                                matched_target = True; break
+                        if matched_target: success += 1
+                    
+                    elif eval_mode == "targeted_removal":
+                        matched_any, matched_source = False, False
+                        for d_box in boxes:
+                            if calculate_iou(gt_box, d_box.xyxy[0].tolist()) > 0.5:
+                                matched_any = True
+                                if int(d_box.cls[0]) == src_c: matched_source = True
+                        
+                        if removal_strict:
+                            if not matched_any: success += 1
+                        else:
+                            if not matched_source: success += 1
             
-            if tgts_m > 0:
-                pair_asr = suc_m / tgts_m
-                print(f"[DEBUG][ASR] GT Pair {src_c}->{tgt_c}: {pair_asr*100:.1f}% ({suc_m}/{tgts_m})")
-                total_asr_m += pair_asr
-                miscls_targets_cnt += tgts_m
-                valid_m_pairs += 1
+            if targets > 0:
+                pair_asr = success / targets
+                if eval_mode == "targeted_miscls":
+                    print(f"[DEBUG][ASR] Miscls Pair {src_c}->{tgt_c}: {pair_asr*100:.1f}% ({success}/{targets})")
+                    total_asr_m += pair_asr
+                    miscls_targets_cnt += targets
+                    valid_m_pairs += 1
+                else:
+                    print(f"[DEBUG][ASR] Removal Source {src_c}: {pair_asr*100:.1f}% ({success}/{targets}) strict={removal_strict}")
+                    total_asr_r += pair_asr
+                    removal_targets_cnt += targets
+                    valid_r_pairs += 1
 
     avg_asr_m = total_asr_m / valid_m_pairs if valid_m_pairs > 0 else 0.0
+    avg_asr_r = total_asr_r / valid_r_pairs if valid_r_pairs > 0 else 0.0
     
-    print(f"[DEBUG][ASR] Valid Pairs Evaluated: {valid_m_pairs}/{len(miscls_pairs)}")
-    print(f"[DEBUG][ASR] Avg Miscls ASR (GT Base)={avg_asr_m*100:.1f}%")
+    print(f"[DEBUG][ASR] Avg Miscls ASR={avg_asr_m*100:.1f}% | Avg Removal ASR={avg_asr_r*100:.1f}%")
     
     return avg_asr_m, avg_asr_r, miscls_targets_cnt, removal_targets_cnt
 
@@ -324,8 +355,9 @@ def cfg_get(cfg, key, default):
 
 def get_evaluate_fn(attack_config):
     def evaluate(server_round: int, parameters: NDArrays, config: Dict[str, Scalar]):
-        global _LAST_METRICS
+        global _LAST_METRICS, _BEST_MAP
         print(f"\n🌐 [Server Round {server_round}] 글로벌 모델 평가...")
+        
         server_model = YOLO("yolov8n_custom.yaml")
         try: server_model.load("yolov8n.pt")
         except: pass
@@ -343,44 +375,6 @@ def get_evaluate_fn(attack_config):
         metrics = YOLO(temp_pt).val(data="datas/lisa_yolo/data.yaml", plots=False, save=False, verbose=False)
         map50, f1_score = float(metrics.box.map50), 2 * (float(metrics.box.mp) * float(metrics.box.mr)) / (float(metrics.box.mp) + float(metrics.box.mr) + 1e-6)
         
-        global _BEST_MAP50
-        global _BEST_ROUND
-
-        # 매 round의 최신 global model 저장
-        global_last_pt = os.path.join(log_dir, "global_last.pt")
-        torch.save(
-            {
-                "model": server_model.model.float(),
-                "round": int(server_round),
-                "mAP50": float(map50),
-                "precision": float(metrics.box.mp),
-                "recall": float(metrics.box.mr),
-            },
-            global_last_pt,
-        )
-
-        # mAP50 기준 best global model 저장
-        if float(map50) > float(_BEST_MAP50):
-            _BEST_MAP50 = float(map50)
-            _BEST_ROUND = int(server_round)
-
-            global_best_pt = os.path.join(log_dir, "global_best.pt")
-            torch.save(
-                {
-                    "model": server_model.model.float(),
-                    "round": int(server_round),
-                    "mAP50": float(map50),
-                    "precision": float(metrics.box.mp),
-                    "recall": float(metrics.box.mr),
-                },
-                global_best_pt,
-            )
-
-            print(
-                f"[DEBUG][SERVER] New global best saved: "
-                f"{global_best_pt} | round={server_round}, mAP50={map50:.4f}"
-            )
-
         asr_m, asr_r, tgts_m, tgts_r = 0.0, 0.0, 0, 0
         
         effective_attack_eval = (
@@ -425,6 +419,17 @@ def get_evaluate_fn(attack_config):
                 round(_LAST_METRICS.get("avg_param_delta", 0.0), 6),
                 round(_LAST_METRICS.get("max_param_delta", 0.0), 6),
             ])
+            
+        # [추가됨] Last 및 Best 글로벌 모델의 영구적 보존 처리
+        last_global_pt = os.path.join(log_dir, "last_global_model.pt")
+        shutil.copy(temp_pt, last_global_pt)
+        
+        if map50 > _BEST_MAP:
+            _BEST_MAP = map50
+            best_global_pt = os.path.join(log_dir, "best_global_model.pt")
+            shutil.copy(temp_pt, best_global_pt)
+            print(f"[DEBUG][SERVER] New Best Global Model Saved! (mAP50: {map50:.4f})")
+            
         if os.path.exists(temp_pt): os.remove(temp_pt)
         
         return float(1.0 - map50), {"mAP50": map50, "ASR": main_asr}
@@ -457,6 +462,7 @@ def server_fn(context: Context):
         "asr-max-pairs": cfg_get(cfg, "asr-max-pairs", 6),
         "asr-num-samples": cfg_get(cfg, "asr-num-samples", 100),
         "asr-seed": cfg_get(cfg, "asr-seed", 2026),
+        "removal-strict": cfg_get(cfg, "removal-strict", True),
         "fixed-source-class": None if fixed_src is None else int(fixed_src),
         "fixed-target-class": None if fixed_tgt is None else int(fixed_tgt),
     }
