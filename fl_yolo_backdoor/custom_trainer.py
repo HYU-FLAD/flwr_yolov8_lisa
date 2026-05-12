@@ -5,22 +5,22 @@ import random
 import os
 import copy
 
-FL_LOG_ROOT = os.environ.get("FL_LOG_ROOT", "/home/flba/project/flwr_yolov8_lisa_template/fl_logs")
+FL_LOG_ROOT = os.environ.get("FL_LOG_ROOT", "/home/flba/project/flwr_yolov8_lisa_template/fl_logs_nc2")
 GLOBAL_GEN_PATH = os.path.join(FL_LOG_ROOT, "global_generator.pt")
 
 class AnywhereDoorGenerator(nn.Module):
-    def __init__(self, num_classes=3, patch_size=32):
+    def __init__(self, num_classes=2, patch_size=32):
         super().__init__()
         self.patch_size = patch_size
         self.num_classes = num_classes
         
         self.G_r = nn.Sequential(
-            nn.Linear(num_classes, 128), nn.ReLU(),
-            nn.Linear(128, 3 * patch_size * patch_size)
+            nn.Linear(num_classes, 128, bias=False), nn.ReLU(),
+            nn.Linear(128, 3 * patch_size * patch_size, bias=False)
         )
         self.G_g = nn.Sequential(
-            nn.Linear(num_classes, 128), nn.ReLU(),
-            nn.Linear(128, 3 * patch_size * patch_size)
+            nn.Linear(num_classes, 128, bias=False), nn.ReLU(),
+            nn.Linear(128, 3 * patch_size * patch_size, bias=False)
         )
 
     def forward(self, e_r, e_g):
@@ -39,17 +39,31 @@ class AnywhereDoorGenerator(nn.Module):
         return trigger
 
 class AnywhereDoorTrainer(DetectionTrainer):
-    is_attacker = False
-    attack_config = {}
-    generator = None
-    gen_opt = None
-    pid = None
-    client_dir = None
-    server_round = 0  
-    rng = None
+    def set_custom_args(self, args):
+        self.server_round = args.get("server_round", 0)
+        self.is_attacker = args.get("is_attacker", False)
+        self.attack_config = args.get("attack_config", {})
+        self.pid = args.get("pid", None)
+        self.client_dir = args.get("client_dir", None)
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, overrides=None, _callbacks=None, custom_args=None):
+        self.server_round = 0
+        self.is_attacker = False
+        self.attack_config = {}
+        self.pid = None
+        self.client_dir = None
+        self.generator = None
+        self.gen_opt = None
+        self.rng = None
+        
+        if custom_args:
+            self.set_custom_args(custom_args)
+            
+        try:
+            super().__init__(overrides=overrides, _callbacks=_callbacks)
+        except TypeError:
+            super().__init__(overrides=overrides)
+        
         self.debug_total_selected = 0
         self.debug_total_label_changed = 0
         self.debug_total_poisoned_batches = 0
@@ -62,7 +76,7 @@ class AnywhereDoorTrainer(DetectionTrainer):
 
     def _init_generator(self):
         patch_size = int(self.attack_config.get("trigger-size", 32))
-        nc = int(self.attack_config.get("num-classes", 3))
+        nc = int(self.attack_config.get("num-classes", 2))
         
         self.generator = AnywhereDoorGenerator(num_classes=nc, patch_size=patch_size)
         
@@ -89,9 +103,6 @@ class AnywhereDoorTrainer(DetectionTrainer):
 
     def preprocess_batch(self, batch):
         batch = super().preprocess_batch(batch)
-        if not hasattr(self, "_debug_preprocess_printed"):
-            print("[DEBUG] preprocess_batch called (True Adaptive Trigger 최적화)")
-            self._debug_preprocess_printed = True
             
         if not (self.is_attacker and self.attack_config.get("attack-flag", False)): 
             return batch
@@ -134,7 +145,6 @@ class AnywhereDoorTrainer(DetectionTrainer):
                 scalar = val if scalar is None else scalar + val
             return scalar
         if torch.is_tensor(loss): return loss.sum()
-        print(f"[WARN] Non-tensor loss received: {type(loss)}")
         return torch.tensor(float(loss), device=self.device, requires_grad=True)
 
     def _optimize_generator_on_batch(self, base_batch, e_info, mask_info):
@@ -206,7 +216,10 @@ class AnywhereDoorTrainer(DetectionTrainer):
         
         poison_rate = float(self.attack_config.get("poison-rate", 0.7))
         epsilon = float(self.attack_config.get("epsilon", 0.10))
-        nc = self.generator.num_classes
+        
+        nc = int(self.attack_config.get("num-classes", 2))
+        if self.generator is not None:
+            nc = self.generator.num_classes
 
         modified_images, new_mask, e_info = [], [], []
         is_poisoned, selected, lbl_chg = False, 0, 0
@@ -215,6 +228,9 @@ class AnywhereDoorTrainer(DetectionTrainer):
         cls_long = cls_view.long()
         batch_idx_view = batch_idx.view(-1).long()
         keep_indices = []
+
+        fixed_src = self.attack_config.get("fixed-source-class", None)
+        fixed_tgt = self.attack_config.get("fixed-target-class", None)
 
         for i in range(b):
             img_i = images[i]
@@ -233,24 +249,36 @@ class AnywhereDoorTrainer(DetectionTrainer):
                 src_c, tgt_c, attack_type = force_e[i]
             else:
                 available_classes = [int(x) for x in cls_long[img_obj_mask].unique().tolist() if 0 <= int(x) < nc]
-                
-                fixed_src = int(self.attack_config.get("fixed-source-class", 0))
-                fixed_tgt = int(self.attack_config.get("fixed-target-class", 1))
-
-                # [추가됨] 방어 코드: source와 target이 같으면 에러 발생
-                if fixed_src == fixed_tgt:
-                    raise ValueError(f"fixed-source-class and fixed-target-class must differ: {fixed_src}")
-
-                if fixed_src not in available_classes:
+                if not available_classes:
                     new_mask.append(False)
                     e_info.append(None)
                     modified_images.append(img_i)
                     keep_indices.append(img_obj_mask.nonzero(as_tuple=True)[0])
                     continue
                 
-                src_c = fixed_src
-                tgt_c = fixed_tgt
-                attack_type = "targeted_miscls"
+                if fixed_src is not None and fixed_tgt is not None:
+                    src_c = int(fixed_src)
+                    tgt_c = int(fixed_tgt)
+                    
+                    if src_c == tgt_c or src_c not in available_classes:
+                        new_mask.append(False)
+                        e_info.append(None)
+                        modified_images.append(img_i)
+                        keep_indices.append(img_obj_mask.nonzero(as_tuple=True)[0])
+                        continue
+                    attack_type = self.attack_config.get("eval-attack-mode", "targeted_miscls")
+                else:
+                    src_c = self.rng.choice(available_classes)
+                    possible_targets = [tgt for tgt in range(nc) if tgt != src_c]
+                    if not possible_targets:
+                        new_mask.append(False)
+                        e_info.append(None)
+                        modified_images.append(img_i)
+                        keep_indices.append(img_obj_mask.nonzero(as_tuple=True)[0])
+                        continue
+                    
+                    tgt_c = self.rng.choice(possible_targets)
+                    attack_type = self.attack_config.get("eval-attack-mode", "targeted_miscls")
 
             source_obj_mask = img_obj_mask & (cls_long == src_c)
 
