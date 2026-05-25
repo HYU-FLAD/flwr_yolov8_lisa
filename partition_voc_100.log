@@ -1,0 +1,130 @@
+[SOURCE] dataset_root=/home/flba/project/flwr_yolov8_lisa_template/datas/voc_yolo
+[SOURCE] train_img_root=/home/flba/project/flwr_yolov8_lisa_template/datas/voc_yolo/images/train
+[SOURCE] val_img_root=/home/flba/project/flwr_yolov8_lisa_template/datas/voc_yolo/images/val
+[SOURCE] train_images=16551
+[SOURCE] missing_label_files=0
+[SOURCE] nonempty_label_files=16551
+[SOURCE] class_counts_top20=[(14, 13256), (6, 3267), (8, 3152), (11, 2025), (4, 1764), (2, 1605), (7, 1593), (15, 1487), (0, 1171), (3, 1140), (19, 1108), (12, 1072), (16, 1070), (1, 1064), (13, 1052), (18, 925), (9, 847), (10, 824), (5, 822), (17, 814)]
+[BUCKET] class_0: 781
+[BUCKET] class_1: 254
+[BUCKET] class_10: 49
+[BUCKET] class_11: 1138
+[BUCKET] class_12: 310
+[BUCKET] class_13: 248
+[BUCKET] class_14: 1715
+[BUCKET] class_15: 238
+[BUCKET] class_16: 338
+[BUCKET] class_17: 155
+[BUCKET] class_18: 598
+[BUCKET] class_19: 275
+[BUCKET] class_2: 1004
+[BUCKET] class_3: 453
+[BUCKET] class_4: 243
+[BUCKET] class_5: 232
+[BUCKET] class_6: 892
+[BUCKET] class_7: 1131
+[BUCKET] class_8: 262
+[BUCKET] class_9: 354
+[BUCKET] mixed: 5881
+[CLIENT 0] train_images=176, train_labels=176, nonempty=176, class_counts_top10=[(14, 131), (6, 40), (8, 37), (4, 24), (15, 22), (16, 20), (11, 19), (7, 18), (2, 15), (12, 15)]
+[CLIENT 1] train_images=176, train_labels=176, nonempty=176, class_counts_top10=[(14, 121), (6, 41), (15, 33), (8, 28), (2, 25), (11, 22), (7, 19), (4, 17), (0, 14), (13, 12)]
+[CLIENT 2] train_images=176, train_labels=176, nonempty=176, class_counts_top10=[(14, 138), (8, 47), (6, 31), (12, 18), (11, 18), (7, 16), (1, 16), (16, 16), (5, 14), (10, 13)]
+[CLIENT 3] train_images=176, train_labels=176, nonempty=176, class_counts_top10=[(14, 150), (6, 36), (8, 36), (2, 22), (19, 21), (11, 18), (15, 18), (7, 15), (1, 13), (4, 13)]
+[CLIENT 4] train_images=175, train_labels=175, nonempty=175, class_counts_top10=[(14, 132), (6, 28), (8, 23), (7, 20), (13, 19), (2, 19), (11, 15), (4, 14), (12, 14), (3, 13)]
+[CLIENT 5] train_images=175, train_labels=175, nonempty=175, class_counts_top10=[(14, 92), (6, 41), (4, 36), (8, 23), (11, 21), (5, 17), (7, 16), (17, 13), (12, 13), (18, 11)]
+[CLIENT 6] train_images=175, train_labels=175, nonempty=175, class_counts_top10=[(14, 145), (8, 41), (6, 30), (4, 20), (11, 19), (19, 18), (7, 17), (16, 17), (2, 16), (1, 15)]
+[CLIENT 7] train_images=175, train_labels=175, nonempty=175, class_counts_top10=[(14, 124), (8, 36), (15, 32), (6, 28), (12, 21), (11, 21), (16, 20), (2, 17), (13, 16), (7, 15)]
+[CLIENT 8] train_images=175, train_labels=175, nonempty=175, class_counts_top10=[(14, 120), (6, 29), (11, 25), (8, 23), (15, 18), (7, 17), (16, 17), (4, 16), (13, 14), (12, 14)]
+[CLIENT 9] train_images=175, train_labels=175, nonempty=175, class_counts_top10=[(14, 120), (8, 54), (11, 23), (0, 21), (6, 20), (7, 15), (15, 15), (19, 14), (10, 12), (13, 11)]
+[CLIENT 10] train_images=174, train_labels=174, nonempty=174, class_counts_top10=[(14, 145), (8, 38), (6, 25), (16, 20), (11, 18), (4, 16), (2, 15), (7, 14), (12, 13), (0, 12)]
+[CLIENT 11] train_images=174, train_labels=174, nonempty=174, class_counts_top10=[(14, 184), (8, 33), (6, 31), (4, 19), (7, 17), (1, 17), (11, 16), (16, 15), (2, 12), (5, 11)]
+[CLIENT 12] train_images=174, train_labels=174, nonempty=174, class_counts_top10=[(14, 141), (6, 35), (11, 26), (8, 26), (2, 18), (1, 17), (7, 16), (15, 16), (16, 16), (3, 15)]
+[CLIENT 13] train_images=174, train_labels=174, nonempty=174, class_counts_top10=[(14, 150), (8, 37), (6, 31), (11, 24), (7, 19), (13, 18), (15, 18), (4, 17), (16, 15), (12, 15)]
+[CLIENT 14] train_images=174, train_labels=174, nonempty=174, class_counts_top10=[(14, 158), (6, 39), (8, 27), (11, 25), (16, 21), (19, 15), (7, 15), (15, 15), (0, 14), (12, 14)]
+[CLIENT 15] train_images=173, train_labels=173, nonempty=173, class_counts_top10=[(14, 141), (8, 42), (6, 32), (4, 23), (11, 23), (15, 22), (7, 16), (13, 16), (16, 15), (2, 13)]
+[CLIENT 16] train_images=173, train_labels=173, nonempty=173, class_counts_top10=[(14, 132), (8, 47), (3, 30), (6, 26), (4, 19), (11, 18), (16, 17), (15, 17), (5, 15), (7, 15)]
+[CLIENT 17] train_images=173, train_labels=173, nonempty=173, class_counts_top10=[(14, 113), (8, 52), (6, 31), (15, 21), (11, 20), (0, 18), (7, 16), (2, 16), (13, 14), (3, 13)]
+[CLIENT 18] train_images=173, train_labels=173, nonempty=173, class_counts_top10=[(14, 137), (6, 37), (4, 22), (11, 21), (8, 19), (3, 16), (2, 15), (7, 14), (15, 13), (16, 13)]
+[CLIENT 19] train_images=173, train_labels=173, nonempty=173, class_counts_top10=[(14, 171), (8, 48), (2, 44), (6, 29), (11, 22), (1, 21), (15, 19), (13, 16), (19, 16), (7, 14)]
+[CLIENT 20] train_images=173, train_labels=173, nonempty=173, class_counts_top10=[(14, 111), (6, 39), (15, 32), (12, 24), (8, 23), (11, 19), (2, 19), (7, 15), (13, 15), (4, 14)]
+[CLIENT 21] train_images=173, train_labels=173, nonempty=173, class_counts_top10=[(14, 121), (6, 35), (8, 27), (11, 24), (15, 19), (4, 18), (19, 13), (16, 13), (3, 12), (9, 12)]
+[CLIENT 22] train_images=173, train_labels=173, nonempty=173, class_counts_top10=[(14, 123), (8, 42), (11, 30), (6, 28), (7, 17), (15, 13), (1, 12), (13, 12), (2, 12), (0, 11)]
+[CLIENT 23] train_images=173, train_labels=173, nonempty=173, class_counts_top10=[(14, 148), (6, 32), (8, 25), (11, 20), (2, 18), (15, 16), (7, 14), (4, 14), (13, 14), (12, 14)]
+[CLIENT 24] train_images=173, train_labels=173, nonempty=173, class_counts_top10=[(14, 110), (6, 36), (8, 28), (2, 25), (11, 23), (7, 20), (15, 16), (0, 15), (5, 13), (9, 12)]
+[CLIENT 25] train_images=173, train_labels=173, nonempty=173, class_counts_top10=[(14, 136), (6, 50), (8, 38), (15, 22), (11, 19), (18, 17), (7, 17), (13, 15), (5, 12), (2, 11)]
+[CLIENT 26] train_images=173, train_labels=173, nonempty=173, class_counts_top10=[(14, 145), (6, 50), (4, 44), (8, 38), (0, 19), (7, 19), (1, 17), (5, 16), (10, 16), (15, 16)]
+[CLIENT 27] train_images=173, train_labels=173, nonempty=173, class_counts_top10=[(14, 111), (8, 39), (6, 29), (11, 19), (12, 13), (7, 13), (15, 12), (5, 12), (3, 11), (4, 11)]
+[CLIENT 28] train_images=173, train_labels=173, nonempty=173, class_counts_top10=[(14, 131), (8, 39), (6, 27), (13, 26), (19, 23), (4, 22), (11, 21), (2, 20), (16, 20), (3, 18)]
+[CLIENT 29] train_images=173, train_labels=173, nonempty=173, class_counts_top10=[(14, 130), (8, 26), (6, 23), (7, 22), (13, 17), (11, 17), (3, 15), (4, 13), (1, 13), (19, 12)]
+[CLIENT 30] train_images=173, train_labels=173, nonempty=173, class_counts_top10=[(14, 144), (8, 26), (6, 22), (11, 18), (4, 15), (15, 14), (3, 14), (2, 14), (7, 13), (17, 13)]
+[CLIENT 31] train_images=172, train_labels=172, nonempty=172, class_counts_top10=[(14, 111), (8, 35), (15, 32), (6, 27), (11, 18), (4, 18), (7, 15), (0, 15), (2, 14), (19, 12)]
+[CLIENT 32] train_images=171, train_labels=171, nonempty=171, class_counts_top10=[(14, 131), (4, 34), (6, 29), (8, 28), (1, 25), (11, 21), (15, 20), (19, 16), (7, 14), (12, 12)]
+[CLIENT 33] train_images=171, train_labels=171, nonempty=171, class_counts_top10=[(14, 170), (8, 41), (11, 28), (0, 18), (6, 17), (2, 17), (7, 15), (18, 13), (12, 13), (1, 9)]
+[CLIENT 34] train_images=171, train_labels=171, nonempty=171, class_counts_top10=[(14, 103), (6, 29), (11, 25), (8, 24), (2, 21), (4, 19), (12, 16), (7, 13), (15, 13), (19, 12)]
+[CLIENT 35] train_images=171, train_labels=171, nonempty=171, class_counts_top10=[(14, 124), (8, 39), (6, 29), (2, 26), (11, 22), (15, 22), (7, 19), (13, 14), (4, 14), (19, 14)]
+[CLIENT 36] train_images=171, train_labels=171, nonempty=171, class_counts_top10=[(14, 115), (8, 38), (6, 36), (11, 22), (7, 18), (2, 13), (17, 12), (15, 12), (1, 11), (9, 11)]
+[CLIENT 37] train_images=171, train_labels=171, nonempty=171, class_counts_top10=[(14, 96), (8, 43), (6, 29), (11, 23), (7, 20), (1, 19), (2, 18), (16, 17), (4, 17), (15, 14)]
+[CLIENT 38] train_images=168, train_labels=168, nonempty=168, class_counts_top10=[(14, 124), (8, 46), (6, 34), (4, 23), (11, 18), (1, 16), (3, 14), (2, 14), (13, 13), (7, 12)]
+[CLIENT 39] train_images=168, train_labels=168, nonempty=168, class_counts_top10=[(14, 134), (6, 47), (8, 32), (4, 23), (2, 21), (11, 19), (7, 13), (3, 13), (0, 13), (15, 12)]
+[CLIENT 40] train_images=168, train_labels=168, nonempty=168, class_counts_top10=[(14, 112), (8, 29), (6, 27), (3, 27), (11, 18), (4, 16), (7, 16), (0, 16), (9, 16), (13, 13)]
+[CLIENT 41] train_images=168, train_labels=168, nonempty=168, class_counts_top10=[(14, 138), (8, 32), (2, 27), (6, 24), (11, 19), (7, 18), (19, 17), (9, 15), (4, 14), (3, 14)]
+[CLIENT 42] train_images=168, train_labels=168, nonempty=168, class_counts_top10=[(14, 135), (6, 45), (8, 39), (3, 20), (11, 17), (0, 17), (16, 15), (7, 15), (4, 13), (12, 12)]
+[CLIENT 43] train_images=167, train_labels=167, nonempty=167, class_counts_top10=[(14, 123), (8, 43), (6, 27), (3, 20), (11, 19), (0, 16), (1, 15), (12, 15), (15, 15), (7, 15)]
+[CLIENT 44] train_images=167, train_labels=167, nonempty=167, class_counts_top10=[(14, 113), (6, 40), (4, 26), (8, 24), (11, 17), (7, 16), (2, 16), (13, 15), (1, 14), (16, 14)]
+[CLIENT 45] train_images=167, train_labels=167, nonempty=167, class_counts_top10=[(14, 188), (8, 34), (6, 29), (13, 20), (4, 17), (7, 16), (16, 16), (1, 15), (11, 15), (0, 11)]
+[CLIENT 46] train_images=167, train_labels=167, nonempty=167, class_counts_top10=[(14, 150), (6, 45), (8, 36), (15, 25), (4, 23), (2, 17), (11, 16), (12, 15), (7, 15), (3, 14)]
+[CLIENT 47] train_images=167, train_labels=167, nonempty=167, class_counts_top10=[(14, 145), (8, 40), (6, 34), (4, 23), (11, 21), (2, 20), (10, 19), (7, 19), (3, 19), (1, 14)]
+[CLIENT 48] train_images=166, train_labels=166, nonempty=166, class_counts_top10=[(14, 116), (6, 30), (13, 26), (8, 26), (4, 24), (11, 18), (7, 15), (19, 15), (1, 13), (12, 13)]
+[CLIENT 49] train_images=165, train_labels=165, nonempty=165, class_counts_top10=[(14, 127), (4, 34), (11, 33), (6, 30), (8, 24), (7, 16), (19, 13), (3, 13), (18, 12), (13, 12)]
+[CLIENT 50] train_images=165, train_labels=165, nonempty=165, class_counts_top10=[(14, 155), (8, 30), (16, 26), (6, 21), (11, 18), (4, 18), (15, 18), (12, 16), (3, 16), (1, 15)]
+[CLIENT 51] train_images=165, train_labels=165, nonempty=165, class_counts_top10=[(14, 117), (6, 41), (8, 30), (2, 24), (7, 20), (11, 20), (15, 18), (4, 16), (1, 16), (17, 15)]
+[CLIENT 52] train_images=165, train_labels=165, nonempty=165, class_counts_top10=[(14, 116), (8, 42), (11, 23), (6, 21), (7, 15), (2, 14), (15, 14), (4, 12), (19, 11), (5, 11)]
+[CLIENT 53] train_images=164, train_labels=164, nonempty=164, class_counts_top10=[(14, 172), (19, 52), (8, 49), (6, 36), (2, 22), (7, 18), (11, 14), (1, 14), (15, 14), (12, 13)]
+[CLIENT 54] train_images=162, train_labels=162, nonempty=162, class_counts_top10=[(14, 130), (6, 37), (8, 26), (11, 21), (2, 15), (7, 15), (9, 13), (4, 13), (3, 12), (12, 11)]
+[CLIENT 55] train_images=161, train_labels=161, nonempty=161, class_counts_top10=[(14, 127), (8, 34), (4, 31), (16, 25), (11, 22), (6, 15), (7, 14), (2, 12), (19, 11), (0, 10)]
+[CLIENT 56] train_images=161, train_labels=161, nonempty=161, class_counts_top10=[(14, 112), (8, 43), (6, 27), (11, 20), (4, 20), (0, 17), (16, 15), (7, 15), (17, 14), (2, 13)]
+[CLIENT 57] train_images=161, train_labels=161, nonempty=161, class_counts_top10=[(14, 111), (6, 39), (8, 34), (4, 32), (11, 22), (12, 18), (15, 18), (7, 17), (3, 15), (2, 14)]
+[CLIENT 58] train_images=161, train_labels=161, nonempty=161, class_counts_top10=[(14, 139), (8, 41), (6, 30), (4, 26), (11, 21), (15, 18), (7, 16), (10, 12), (16, 12), (2, 12)]
+[CLIENT 59] train_images=161, train_labels=161, nonempty=161, class_counts_top10=[(14, 158), (6, 39), (11, 21), (4, 19), (8, 18), (1, 15), (7, 13), (2, 12), (16, 11), (13, 10)]
+[CLIENT 60] train_images=161, train_labels=161, nonempty=161, class_counts_top10=[(14, 132), (8, 30), (6, 29), (4, 17), (11, 17), (2, 16), (7, 15), (1, 15), (12, 13), (0, 12)]
+[CLIENT 61] train_images=161, train_labels=161, nonempty=161, class_counts_top10=[(14, 111), (6, 40), (15, 33), (8, 26), (11, 26), (19, 17), (7, 16), (2, 15), (9, 11), (0, 10)]
+[CLIENT 62] train_images=160, train_labels=160, nonempty=160, class_counts_top10=[(14, 114), (8, 34), (4, 23), (6, 21), (11, 21), (9, 18), (13, 17), (7, 17), (2, 14), (12, 13)]
+[CLIENT 63] train_images=160, train_labels=160, nonempty=160, class_counts_top10=[(14, 128), (6, 37), (8, 27), (11, 23), (4, 20), (7, 20), (15, 18), (2, 14), (17, 12), (12, 12)]
+[CLIENT 64] train_images=160, train_labels=160, nonempty=160, class_counts_top10=[(14, 137), (6, 34), (9, 21), (4, 19), (3, 18), (2, 18), (19, 17), (5, 16), (8, 16), (0, 14)]
+[CLIENT 65] train_images=160, train_labels=160, nonempty=160, class_counts_top10=[(14, 122), (6, 43), (4, 30), (8, 23), (2, 22), (7, 21), (11, 20), (15, 13), (17, 13), (18, 12)]
+[CLIENT 66] train_images=160, train_labels=160, nonempty=160, class_counts_top10=[(14, 135), (4, 34), (6, 32), (15, 30), (8, 30), (11, 20), (16, 15), (0, 14), (2, 14), (7, 14)]
+[CLIENT 67] train_images=160, train_labels=160, nonempty=160, class_counts_top10=[(14, 111), (8, 36), (11, 20), (3, 19), (15, 17), (6, 17), (0, 13), (7, 13), (4, 13), (19, 12)]
+[CLIENT 68] train_images=160, train_labels=160, nonempty=160, class_counts_top10=[(14, 139), (8, 28), (6, 22), (11, 19), (1, 19), (2, 17), (16, 16), (0, 14), (7, 14), (4, 14)]
+[CLIENT 69] train_images=160, train_labels=160, nonempty=160, class_counts_top10=[(14, 107), (8, 26), (6, 20), (11, 19), (4, 18), (2, 17), (7, 16), (0, 13), (12, 13), (15, 12)]
+[CLIENT 70] train_images=160, train_labels=160, nonempty=160, class_counts_top10=[(14, 131), (6, 24), (15, 23), (8, 22), (19, 17), (4, 16), (2, 16), (16, 15), (1, 15), (11, 15)]
+[CLIENT 71] train_images=160, train_labels=160, nonempty=160, class_counts_top10=[(14, 140), (15, 42), (6, 38), (8, 33), (11, 24), (3, 21), (4, 17), (19, 14), (7, 14), (13, 12)]
+[CLIENT 72] train_images=160, train_labels=160, nonempty=160, class_counts_top10=[(14, 165), (6, 30), (8, 23), (12, 21), (11, 18), (7, 16), (10, 15), (16, 14), (3, 14), (0, 13)]
+[CLIENT 73] train_images=160, train_labels=160, nonempty=160, class_counts_top10=[(14, 135), (6, 31), (2, 23), (8, 23), (11, 15), (4, 14), (7, 14), (12, 12), (0, 11), (15, 10)]
+[CLIENT 74] train_images=160, train_labels=160, nonempty=160, class_counts_top10=[(14, 142), (8, 34), (6, 26), (19, 20), (11, 15), (7, 15), (4, 14), (16, 13), (2, 13), (15, 12)]
+[CLIENT 75] train_images=159, train_labels=159, nonempty=159, class_counts_top10=[(14, 135), (6, 33), (8, 27), (2, 23), (11, 22), (7, 16), (0, 15), (3, 13), (5, 13), (1, 13)]
+[CLIENT 76] train_images=159, train_labels=159, nonempty=159, class_counts_top10=[(14, 140), (6, 45), (11, 26), (8, 24), (7, 16), (2, 14), (12, 13), (17, 13), (13, 13), (15, 13)]
+[CLIENT 77] train_images=159, train_labels=159, nonempty=159, class_counts_top10=[(14, 136), (6, 30), (8, 29), (15, 23), (7, 21), (11, 16), (1, 13), (3, 12), (13, 12), (2, 12)]
+[CLIENT 78] train_images=159, train_labels=159, nonempty=159, class_counts_top10=[(14, 130), (15, 32), (8, 30), (11, 22), (6, 21), (4, 19), (7, 16), (2, 12), (0, 12), (13, 12)]
+[CLIENT 79] train_images=159, train_labels=159, nonempty=159, class_counts_top10=[(14, 152), (6, 39), (4, 25), (11, 23), (2, 19), (8, 17), (19, 16), (9, 16), (7, 15), (18, 14)]
+[CLIENT 80] train_images=159, train_labels=159, nonempty=159, class_counts_top10=[(14, 129), (8, 30), (6, 23), (11, 20), (2, 19), (1, 19), (19, 16), (7, 15), (16, 12), (17, 10)]
+[CLIENT 81] train_images=157, train_labels=157, nonempty=157, class_counts_top10=[(14, 140), (6, 44), (8, 28), (11, 23), (3, 22), (4, 19), (2, 15), (13, 12), (12, 12), (7, 11)]
+[CLIENT 82] train_images=157, train_labels=157, nonempty=157, class_counts_top10=[(14, 150), (6, 47), (11, 18), (7, 17), (2, 14), (8, 14), (12, 13), (4, 12), (1, 12), (13, 12)]
+[CLIENT 83] train_images=157, train_labels=157, nonempty=157, class_counts_top10=[(14, 115), (6, 46), (8, 29), (2, 26), (0, 24), (7, 21), (11, 18), (4, 18), (3, 13), (9, 11)]
+[CLIENT 84] train_images=157, train_labels=157, nonempty=157, class_counts_top10=[(14, 140), (6, 39), (8, 38), (2, 24), (11, 18), (15, 17), (7, 16), (0, 14), (4, 14), (3, 13)]
+[CLIENT 85] train_images=157, train_labels=157, nonempty=157, class_counts_top10=[(14, 124), (6, 42), (4, 26), (11, 25), (15, 16), (8, 15), (19, 13), (7, 13), (17, 13), (2, 12)]
+[CLIENT 86] train_images=157, train_labels=157, nonempty=157, class_counts_top10=[(14, 108), (6, 45), (11, 26), (8, 21), (7, 18), (3, 17), (19, 16), (2, 15), (4, 12), (17, 10)]
+[CLIENT 87] train_images=157, train_labels=157, nonempty=157, class_counts_top10=[(14, 150), (6, 31), (8, 21), (11, 19), (7, 16), (4, 16), (3, 15), (2, 14), (13, 12), (18, 11)]
+[CLIENT 88] train_images=157, train_labels=157, nonempty=157, class_counts_top10=[(14, 125), (8, 47), (6, 31), (11, 20), (7, 18), (2, 15), (3, 15), (17, 12), (4, 11), (12, 11)]
+[CLIENT 89] train_images=157, train_labels=157, nonempty=157, class_counts_top10=[(14, 146), (6, 35), (4, 33), (8, 23), (11, 22), (7, 17), (1, 17), (3, 14), (9, 13), (12, 12)]
+[CLIENT 90] train_images=157, train_labels=157, nonempty=157, class_counts_top10=[(14, 146), (6, 31), (8, 30), (2, 24), (4, 21), (15, 19), (11, 18), (7, 18), (12, 15), (3, 15)]
+[CLIENT 91] train_images=157, train_labels=157, nonempty=157, class_counts_top10=[(14, 145), (8, 26), (6, 26), (11, 22), (2, 14), (7, 14), (16, 14), (4, 14), (12, 13), (0, 11)]
+[CLIENT 92] train_images=156, train_labels=156, nonempty=156, class_counts_top10=[(14, 129), (6, 42), (8, 27), (1, 20), (4, 20), (11, 18), (7, 17), (0, 14), (16, 13), (10, 12)]
+[CLIENT 93] train_images=156, train_labels=156, nonempty=156, class_counts_top10=[(14, 106), (8, 40), (6, 38), (11, 24), (2, 21), (10, 13), (7, 13), (3, 13), (1, 11), (15, 11)]
+[CLIENT 94] train_images=156, train_labels=156, nonempty=156, class_counts_top10=[(14, 115), (6, 30), (8, 22), (7, 21), (2, 18), (11, 18), (4, 17), (15, 17), (19, 16), (0, 14)]
+[CLIENT 95] train_images=156, train_labels=156, nonempty=156, class_counts_top10=[(14, 112), (6, 40), (8, 30), (2, 29), (0, 27), (11, 22), (15, 20), (4, 18), (7, 14), (19, 12)]
+[CLIENT 96] train_images=156, train_labels=156, nonempty=156, class_counts_top10=[(14, 134), (6, 29), (8, 24), (16, 22), (4, 17), (11, 16), (13, 15), (7, 14), (9, 13), (15, 13)]
+[CLIENT 97] train_images=156, train_labels=156, nonempty=156, class_counts_top10=[(14, 133), (4, 48), (6, 39), (8, 24), (15, 19), (11, 18), (2, 18), (7, 16), (16, 15), (18, 10)]
+[CLIENT 98] train_images=155, train_labels=155, nonempty=155, class_counts_top10=[(14, 165), (6, 40), (8, 28), (4, 22), (11, 15), (7, 15), (9, 14), (2, 12), (10, 12), (5, 11)]
+[CLIENT 99] train_images=155, train_labels=155, nonempty=155, class_counts_top10=[(14, 155), (6, 32), (8, 29), (11, 21), (7, 15), (2, 13), (12, 13), (4, 11), (3, 10), (0, 10)]
+[CHECK] all 100 clients have data.yaml
+[DONE] partition root: datas/voc_yolo/client_isolated_100
