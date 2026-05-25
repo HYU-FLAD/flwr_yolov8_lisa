@@ -12,18 +12,69 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple, List
 from flwr.server import ServerApp, ServerConfig, ServerAppComponents
 from flwr.server.strategy import FedAvg
-from flwr.common import Context, NDArrays, Scalar, Metrics
+from flwr.common import Context, NDArrays, Scalar, Metrics, ndarrays_to_parameters
 from ultralytics import YOLO
 
 from fl_yolo_backdoor.custom_trainer import AnywhereDoorGenerator
 
-FL_LOG_ROOT = os.environ.get("FL_LOG_ROOT", "/home/flba/project/flwr_yolov8_lisa_template/fl_logs")
+FL_LOG_ROOT = os.environ.get("FL_LOG_ROOT", "/home/flba/project/flwr_yolov8_lisa_template/fl_logs_nc7")
 os.makedirs(FL_LOG_ROOT, exist_ok=True)
 GLOBAL_GEN_PATH = os.path.join(FL_LOG_ROOT, "global_generator.pt")
 
 _CLEANED = False
+_BEST_MAP50 = -1.0
+_BEST_ROUND = -1
 
-def init_global_generator_once(patch_size=32, nc=3, reset=False):
+def parse_bool(x):
+    if isinstance(x, bool):
+        return x
+    if isinstance(x, str):
+        return x.strip().lower() in ["1", "true", "yes", "y", "on"]
+    return bool(x)
+
+def assert_model_nc(yolo_obj, expected_nc: int, where: str):
+    actual_nc = int(getattr(yolo_obj.model.model[-1], "nc", -1))
+    if actual_nc != expected_nc:
+        raise ValueError(
+            f"[{where}] Model nc mismatch: actual_nc={actual_nc}, expected_nc={expected_nc}"
+        )
+
+def assert_data_yaml_nc(data_yaml: str, expected_nc: int, where: str):
+    with open(data_yaml, "r") as f:
+        data_cfg = yaml.safe_load(f)
+
+    actual_nc = int(data_cfg.get("nc", -1))
+    names = data_cfg.get("names", None)
+
+    if actual_nc != expected_nc:
+        raise ValueError(
+            f"[{where}] data.yaml nc mismatch: "
+            f"data_nc={actual_nc}, expected_nc={expected_nc}, path={data_yaml}"
+        )
+
+    if names is not None and len(names) != expected_nc:
+        raise ValueError(
+            f"[{where}] data.yaml names length mismatch: "
+            f"len(names)={len(names)}, expected_nc={expected_nc}, path={data_yaml}"
+        )
+
+def get_initial_parameters(model_yaml: str, pretrained_weights: str, expected_nc: int):
+    yolo = YOLO(model_yaml)
+    if pretrained_weights and str(pretrained_weights).lower() not in ["none", ""]:
+        try:
+            yolo.load(pretrained_weights)
+        except Exception as e:
+            print(f"[WARN][SERVER] pretrained load failed for initial parameters: {e}")
+            
+    assert_model_nc(yolo, expected_nc, "server-initial-parameters")
+    
+    ndarrays = [
+        v.detach().cpu().numpy().astype(np.float32)
+        for v in yolo.model.state_dict().values()
+    ]
+    return ndarrays_to_parameters(ndarrays)
+
+def init_global_generator_once(patch_size=32, nc=7, reset=False):
     global _CLEANED
     if _CLEANED: return
     
@@ -65,8 +116,9 @@ with open(csv_path, mode='w', newline='') as file:
     writer = csv.writer(file)
     writer.writerow([
         "Round", "mAP50", "F1_Score", "Precision", "Recall", 
-        "ASR_Miscls_Avg", "ASR_Removal_Avg", "Active_ASR", "Miscls_Targets", "Removal_Targets", 
-        "Num_Attackers", "Total_Label_Changed"
+        "ASR_Miscls_Avg", "ASR_Removal_Avg", "ASR_CleanPred", "Active_ASR", "Miscls_Targets", "Removal_Targets", 
+        "Num_Attackers", "Total_Label_Changed", "Total_Poisoned_Batches", "Total_Gen_Loss_Labels", "Total_Gen_Steps", "Num_Gen_Paths",
+        "Avg_Param_Delta", "Max_Param_Delta"
     ])
 
 def calculate_iou(box1, box2):
@@ -78,7 +130,7 @@ def calculate_iou(box1, box2):
     union = box1_area + box2_area - inter
     return inter / (union + 1e-6)
 
-def collect_val_images(data_yaml="datas/lisa_yolo/data.yaml"):
+def collect_val_images(data_yaml: str):
     try:
         with open(data_yaml, "r") as f: data_cfg = yaml.safe_load(f)
         yaml_dir = Path(data_yaml).parent
@@ -113,44 +165,72 @@ def collect_val_images(data_yaml="datas/lisa_yolo/data.yaml"):
         print(f"[WARN] Val images parsing failed: {e}")
         return []
 
-def sync_global_generator(server_round, patch_size=32, nc=3):
-    gen_files = glob.glob(os.path.join(FL_LOG_ROOT, "client_*", f"generator_round_{server_round}.pt"))
-    print(f"[DEBUG][SERVER] Aggregating G_phi from {len(gen_files)} clients.")
-    if not gen_files: return 0
+def sync_global_generator(gen_files: List[str], patch_size=32, nc=7, gen_weights=None):
+    if gen_weights is None:
+        gen_weights = {}
+
+    print(f"[DEBUG][SERVER] Aggregating G_phi from {len(gen_files)} active attackers. gen_weight_sum={sum(gen_weights.values()):.1f}")
+    if not gen_files:
+        return 0
 
     expected_sd = AnywhereDoorGenerator(num_classes=nc, patch_size=patch_size).state_dict()
     valid_states = []
+    weights = []
 
     for f in gen_files:
         try:
-            try: sd = torch.load(f, map_location="cpu", weights_only=True)
-            except TypeError: sd = torch.load(f, map_location="cpu")
-            
-            valid = (set(sd.keys()) == set(expected_sd.keys()) and 
-                     all(sd[k].shape == expected_sd[k].shape for k in expected_sd.keys()))
-            if valid: valid_states.append(sd)
-            else: print(f"[WARN][SERVER] Invalid generator skipped: {f}")
-        except Exception as e: print(f"[WARN][SERVER] Failed to load generator {f}: {e}")
+            try:
+                sd = torch.load(f, map_location="cpu", weights_only=True)
+            except TypeError:
+                sd = torch.load(f, map_location="cpu")
 
-    if not valid_states: return 0
+            valid = (
+                set(sd.keys()) == set(expected_sd.keys())
+                and all(sd[k].shape == expected_sd[k].shape for k in expected_sd.keys())
+            )
 
-    avg_state = {
-        k: torch.stack([sd[k].float() for sd in valid_states], dim=0).mean(dim=0)
-        for k in expected_sd.keys()
-    }
+            if valid:
+                valid_states.append(sd)
+                weights.append(float(gen_weights.get(f, 1.0)))
+            else:
+                print(f"[WARN][SERVER] Invalid generator skipped: {f}")
+
+        except Exception as e:
+            print(f"[WARN][SERVER] Failed to load generator {f}: {e}")
+
+    if not valid_states:
+        return 0
+
+    w_tensor = torch.tensor(weights, dtype=torch.float32)
+    w_sum = float(w_tensor.sum().item()) + 1e-12
+
+    avg_state = {}
+    for k in expected_sd.keys():
+        stacked = torch.stack([sd[k].float() for sd in valid_states], dim=0)
+        view_shape = [len(valid_states)] + [1] * (stacked.ndim - 1)
+        ww = w_tensor.view(*view_shape)
+        avg_state[k] = (stacked * ww).sum(dim=0) / w_sum
+
     torch.save(avg_state, GLOBAL_GEN_PATH)
     return len(valid_states)
 
-def measure_anywheredoor_asr(model: YOLO, attack_config: dict):
-    val_images = collect_val_images()
-    if not val_images or not os.path.exists(GLOBAL_GEN_PATH): return 0.0, 0.0, 0, 0
+def measure_anywheredoor_asr(model: YOLO, attack_config: dict, global_data_yaml: str):
+    val_images = collect_val_images(global_data_yaml)
+    if not val_images:
+        print("[WARN][ASR] No val images found.")
+        return 0.0, 0.0, 0, 0, 0.0
+
+    if not os.path.exists(GLOBAL_GEN_PATH):
+        print(f"[WARN][ASR] GLOBAL_GEN_PATH not found: {GLOBAL_GEN_PATH}")
+        return 0.0, 0.0, 0, 0, 0.0
     
-    nc = int(attack_config.get("num-classes", 3))
+    nc = int(attack_config.get("num-classes", 7))
     epsilon = float(attack_config.get("epsilon", 0.10))
     patch_size = int(attack_config.get("trigger-size", 32))
     conf_thresh = float(attack_config.get("asr-conf-thresh", 0.1))
     num_samples = int(attack_config.get("asr-num-samples", 100))
     asr_seed = int(attack_config.get("asr-seed", 2026))
+    max_pairs = int(attack_config.get("asr-max-pairs", 6))
 
     rng = random.Random(asr_seed)
 
@@ -159,21 +239,21 @@ def measure_anywheredoor_asr(model: YOLO, attack_config: dict):
     except: gen.load_state_dict(torch.load(GLOBAL_GEN_PATH, map_location="cpu"))
     gen.eval()
 
-    fixed_src = int(attack_config.get("fixed-source-class", 0))
-    fixed_tgt = int(attack_config.get("fixed-target-class", 1))
+    fixed_src = attack_config.get("fixed-source-class", None)
+    fixed_tgt = attack_config.get("fixed-target-class", None)
 
-    # [추가됨] 방어 코드: source와 target이 같으면 에러 발생
-    if fixed_src == fixed_tgt:
-        raise ValueError(f"Invalid ASR pair: {fixed_src}->{fixed_tgt}")
-
-    miscls_pairs = [(fixed_src, fixed_tgt)]
+    if fixed_src is not None and fixed_tgt is not None:
+        miscls_pairs = [(int(fixed_src), int(fixed_tgt))]
+    else:
+        all_possible = [(s, t) for s in range(nc) for t in range(nc) if s != t]
+        rng.shuffle(all_possible)
+        miscls_pairs = all_possible[:max_pairs]
     
     total_asr_m, valid_m_pairs = 0.0, 0
     miscls_targets_cnt = 0
+    avg_asr_r, removal_targets_cnt = 0.0, 0
     
-    # [수정됨] 이번 실험에서 불필요한 Removal ASR 강제 초기화
-    avg_asr_r = 0.0
-    removal_targets_cnt = 0
+    suc_cp_total, tgts_cp_total = 0, 0
 
     samples = rng.sample(val_images, min(num_samples, len(val_images)))
 
@@ -186,42 +266,111 @@ def measure_anywheredoor_asr(model: YOLO, attack_config: dict):
             trigger_tensor_m = 2.0 * torch.sigmoid(trigger_tensor_m).numpy() - 1.0
             
             suc_m, tgts_m = 0, 0
+            clean_source_hits = 0
+            dirty_source_hits = 0
+            dirty_target_candidates = 0
+            dirty_target_iou03 = 0
+            dirty_target_iou05 = 0
+            dirty_target_conf_max = 0.0
+            
             for img_path in samples:
+                label_path = str(img_path).replace('images', 'labels').rsplit('.', 1)[0] + '.txt'
+                if not os.path.exists(label_path): continue
+                
                 img = cv2.imread(img_path)
                 if img is None: continue
                 img = cv2.resize(img, (640, 640))
                 h, w = 640, 640
                 
-                results_clean = model.predict(img, verbose=False, conf=conf_thresh)
-                if len(results_clean[0].boxes) == 0: continue
+                gt_boxes = []
+                with open(label_path, 'r') as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if len(parts) >= 5:
+                            c_id = int(float(parts[0]))
+                            if c_id == src_c:
+                                x_c, y_c, w_n, h_n = map(float, parts[1:5])
+                                x1 = (x_c - w_n / 2) * w
+                                y1 = (y_c - h_n / 2) * h
+                                x2 = (x_c + w_n / 2) * w
+                                y2 = (y_c + h_n / 2) * h
+                                gt_boxes.append([x1, y1, x2, y2])
+                                
+                if not gt_boxes: continue 
                 
+                clean_res = model.predict(img, verbose=False, conf=conf_thresh)
+                clean_src_boxes = []
+                for c_box in clean_res[0].boxes:
+                    if int(c_box.cls[0]) == src_c:
+                        clean_src_boxes.append(c_box.xyxy[0].tolist())
+
+                for gt_box in gt_boxes:
+                    for c_box in clean_res[0].boxes:
+                        if int(c_box.cls[0]) == src_c and calculate_iou(gt_box, c_box.xyxy[0].tolist()) > 0.5:
+                            clean_source_hits += 1
+                            break
+                            
                 mosaicked_m = np.tile(trigger_tensor_m.transpose(1, 2, 0), ((h // patch_size) + 1, (w // patch_size) + 1, 1))[:h, :w, :]
                 noise_m = (epsilon * 255 * mosaicked_m[..., ::-1]).astype(np.float32)
                 dirty_img_m = np.clip(img.astype(np.float32) + noise_m, 0, 255).astype(np.uint8)
                 
                 res_m = model.predict(dirty_img_m, verbose=False, conf=conf_thresh)
                 
-                for c_box in results_clean[0].boxes:
-                    if int(c_box.cls[0]) != src_c: continue
-                    tgts_m += 1
-                    c_coords = c_box.xyxy[0].tolist()
+                for d_box in res_m[0].boxes:
+                    d_cls = int(d_box.cls[0])
+                    d_conf = float(d_box.conf[0])
+
+                    if d_cls == tgt_c:
+                        dirty_target_candidates += 1
+                        dirty_target_conf_max = max(dirty_target_conf_max, d_conf)
+
+                        for gt_box in gt_boxes:
+                            iou = calculate_iou(gt_box, d_box.xyxy[0].tolist())
+                            if iou > 0.3:
+                                dirty_target_iou03 += 1
+                            if iou > 0.5:
+                                dirty_target_iou05 += 1
+
+                    if d_cls == src_c:
+                        for gt_box in gt_boxes:
+                            if calculate_iou(gt_box, d_box.xyxy[0].tolist()) > 0.5:
+                                dirty_source_hits += 1
+                                break
+                                
+                tgts_m += len(gt_boxes)
+                for gt_box in gt_boxes:
                     for d_box in res_m[0].boxes:
-                        if calculate_iou(c_coords, d_box.xyxy[0].tolist()) > 0.5 and int(d_box.cls[0]) == tgt_c:
+                        if calculate_iou(gt_box, d_box.xyxy[0].tolist()) > 0.5 and int(d_box.cls[0]) == tgt_c:
                             suc_m += 1; break
+                            
+                tgts_cp_total += len(clean_src_boxes)
+                for c_box in clean_src_boxes:
+                    for d_box in res_m[0].boxes:
+                        if calculate_iou(c_box, d_box.xyxy[0].tolist()) > 0.5 and int(d_box.cls[0]) == tgt_c:
+                            suc_cp_total += 1; break
             
             if tgts_m > 0:
                 pair_asr = suc_m / tgts_m
-                print(f"[DEBUG][ASR] Pair {src_c}->{tgt_c}: {pair_asr*100:.1f}% ({suc_m}/{tgts_m})")
+                print(f"[DEBUG][ASR] GT Pair {src_c}->{tgt_c}: {pair_asr*100:.1f}% ({suc_m}/{tgts_m})")
+                print(f"[DEBUG][ASR-DIAG] clean_source_hits={clean_source_hits}/{tgts_m}")
+                print(f"[DEBUG][ASR-DIAG] dirty_source_hits={dirty_source_hits}")
+                print(f"[DEBUG][ASR-DIAG] dirty_target_candidates={dirty_target_candidates}")
+                print(f"[DEBUG][ASR-DIAG] dirty_target_iou03={dirty_target_iou03}")
+                print(f"[DEBUG][ASR-DIAG] dirty_target_iou05={dirty_target_iou05}")
+                print(f"[DEBUG][ASR-DIAG] dirty_target_conf_max={dirty_target_conf_max:.4f}")
+                
                 total_asr_m += pair_asr
                 miscls_targets_cnt += tgts_m
                 valid_m_pairs += 1
 
     avg_asr_m = total_asr_m / valid_m_pairs if valid_m_pairs > 0 else 0.0
+    avg_asr_cp = suc_cp_total / tgts_cp_total if tgts_cp_total > 0 else 0.0
     
-    print(f"[DEBUG][ASR] Valid Pairs: {valid_m_pairs}/{len(miscls_pairs)}")
-    print(f"[DEBUG][ASR] Avg Miscls ASR={avg_asr_m*100:.1f}% (Removal ASR Disabled)")
+    print(f"[DEBUG][ASR] Valid Pairs Evaluated: {valid_m_pairs}/{len(miscls_pairs)}")
+    print(f"[DEBUG][ASR] Avg Miscls ASR (GT Base)={avg_asr_m*100:.1f}%")
+    print(f"[DEBUG][ASR] Avg Clean-Pred ASR={avg_asr_cp*100:.1f}%")
     
-    return avg_asr_m, avg_asr_r, miscls_targets_cnt, removal_targets_cnt
+    return avg_asr_m, avg_asr_r, miscls_targets_cnt, removal_targets_cnt, avg_asr_cp
 
 def get_on_fit_config_fn(local_epochs: int):
     def get_on_fit_config(server_round: int) -> Dict[str, Scalar]:
@@ -229,47 +378,203 @@ def get_on_fit_config_fn(local_epochs: int):
         return {"server_round": server_round, "local_epochs": int(local_epochs)}
     return get_on_fit_config
 
-_LAST_METRICS = {"num_attackers": 0, "total_lbl_chg": 0}
+_LAST_METRICS = {
+    "num_attackers": 0,
+    "total_lbl_chg": 0,
+    "total_poisoned_batches": 0,
+    "total_gen_loss_labels": 0,
+    "total_gen_steps": 0,
+    "avg_param_delta": 0.0,
+    "max_param_delta": 0.0,
+    "attacker_gen_paths": [],
+    "gen_weights": {},
+}
+
 def fit_metrics_aggregation_fn(metrics: List[Tuple[int, Metrics]]) -> Metrics:
     global _LAST_METRICS
+    
+    deltas = [float(m.get("param_delta", 0.0)) for _, m in metrics]
+
+    num_attackers = 0
+    total_lbl_chg = 0
+    total_poisoned_batches = 0
+    total_gen_loss_labels = 0
+    total_gen_steps = 0
+    attacker_gen_paths = []
+    gen_weights = {}
+
+    for _, m in metrics:
+        is_attacker = int(m.get("is_attacker", 0))
+
+        if is_attacker == 1:
+            num_attackers += 1
+            total_lbl_chg += int(m.get("label_changed", 0))
+            total_poisoned_batches += int(m.get("poisoned_batches", 0))
+            total_gen_loss_labels += int(m.get("gen_loss_labels", 0))
+            total_gen_steps += int(m.get("gen_steps", 0))
+
+            gen_path = str(m.get("gen_path", ""))
+            if gen_path and os.path.exists(gen_path):
+                attacker_gen_paths.append(gen_path)
+                
+                # 🎯 분석 사항 반영: gen_loss_labels를 최우선 가중치 기준으로 변경
+                w = int(m.get("gen_loss_labels", 0))
+                if w <= 0:
+                    w = int(m.get("label_changed", 0))
+                if w <= 0:
+                    w = int(m.get("poisoned_batches", 0))
+                gen_weights[gen_path] = max(float(w), 1.0)
+
     _LAST_METRICS = {
-        "num_attackers": sum(int(m.get("is_attacker", 0)) for _, m in metrics),
-        "total_lbl_chg": sum(int(m.get("label_changed", 0)) for _, m in metrics)
+        "num_attackers": num_attackers,
+        "total_lbl_chg": total_lbl_chg,
+        "total_poisoned_batches": total_poisoned_batches,
+        "total_gen_loss_labels": total_gen_loss_labels,
+        "total_gen_steps": total_gen_steps,
+        "avg_param_delta": float(sum(deltas) / max(len(deltas), 1)),
+        "max_param_delta": float(max(deltas) if deltas else 0.0),
+        "attacker_gen_paths": attacker_gen_paths,
+        "gen_weights": gen_weights,
     }
-    return {"num_fit_clients": len(metrics)}
+    
+    # 🎯 분석 사항 반영: 누락되었던 gen_loss_labels 및 gen_steps 출력문 추가
+    print(
+        f"[DEBUG][SERVER] fit clients={len(metrics)} "
+        f"attackers={num_attackers} "
+        f"label_changed={total_lbl_chg} "
+        f"gen_loss_labels={total_gen_loss_labels} "
+        f"gen_steps={total_gen_steps} "
+        f"avg_param_delta={_LAST_METRICS['avg_param_delta']:.6f} "
+        f"max_param_delta={_LAST_METRICS['max_param_delta']:.6f}"
+    )
+
+    return {
+        "num_fit_clients": len(metrics),
+        "num_attackers": num_attackers,
+        "total_lbl_chg": total_lbl_chg,
+        "total_poisoned_batches": total_poisoned_batches,
+        "total_gen_loss_labels": total_gen_loss_labels,
+        "total_gen_steps": total_gen_steps,
+        "avg_param_delta": _LAST_METRICS["avg_param_delta"],
+        "max_param_delta": _LAST_METRICS["max_param_delta"],
+        "num_gen_paths": len(attacker_gen_paths),
+    }
 
 def cfg_get(cfg, key, default):
     val = cfg.get(key, default)
     return default if val is None else val
 
-def get_evaluate_fn(attack_config):
+def get_evaluate_fn(attack_config, global_data_yaml, model_yaml, pretrained_weights):
     def evaluate(server_round: int, parameters: NDArrays, config: Dict[str, Scalar]):
         global _LAST_METRICS
         print(f"\n🌐 [Server Round {server_round}] 글로벌 모델 평가...")
-        server_model = YOLO("yolov8n_custom.yaml")
-        try: server_model.load("yolov8n.pt")
-        except: pass
+        server_model = YOLO(model_yaml)
+        if pretrained_weights and str(pretrained_weights).lower() not in ["none", ""]:
+            try:
+                server_model.load(pretrained_weights)
+            except Exception:
+                pass
         
-        server_model.model.load_state_dict(OrderedDict({k: torch.tensor(v, dtype=server_model.model.state_dict()[k].dtype) for k, v in zip(server_model.model.state_dict().keys(), parameters)}), strict=True)
+        assert_model_nc(server_model, int(attack_config["num-classes"]), "server")
+
+        state = server_model.model.state_dict()
+        new_state = OrderedDict({
+            k: torch.tensor(v, dtype=state[k].dtype) 
+            for k, v in zip(state.keys(), parameters)
+        })
+        server_model.model.load_state_dict(new_state, strict=True)
+        
         temp_pt = os.path.join(log_dir, f"temp_{server_round}.pt")
         torch.save({"model": server_model.model.float()}, temp_pt) 
         
-        metrics = YOLO(temp_pt).val(data="datas/lisa_yolo/data.yaml", plots=False, save=False, verbose=False)
+        metrics = YOLO(temp_pt).val(data=global_data_yaml, plots=False, save=False, verbose=False)
         map50, f1_score = float(metrics.box.map50), 2 * (float(metrics.box.mp) * float(metrics.box.mr)) / (float(metrics.box.mp) + float(metrics.box.mr) + 1e-6)
         
-        asr_m, asr_r, tgts_m, tgts_r = 0.0, 0.0, 0, 0
-        if attack_config.get("attack-flag", False) and _LAST_METRICS["num_attackers"] > 0:
-            if sync_global_generator(server_round, attack_config.get("trigger-size", 32), attack_config.get("num-classes", 3)) > 0:
-                asr_m, asr_r, tgts_m, tgts_r = measure_anywheredoor_asr(YOLO(temp_pt), attack_config)
+        global _BEST_MAP50
+        global _BEST_ROUND
+
+        global_last_pt = os.path.join(log_dir, "global_last.pt")
+        torch.save(
+            {
+                "model": server_model.model.float(),
+                "round": int(server_round),
+                "mAP50": float(map50),
+                "precision": float(metrics.box.mp),
+                "recall": float(metrics.box.mr),
+            },
+            global_last_pt,
+        )
+
+        if float(map50) > float(_BEST_MAP50):
+            _BEST_MAP50 = float(map50)
+            _BEST_ROUND = int(server_round)
+
+            global_best_pt = os.path.join(log_dir, "global_best.pt")
+            torch.save(
+                {
+                    "model": server_model.model.float(),
+                    "round": int(server_round),
+                    "mAP50": float(map50),
+                    "precision": float(metrics.box.mp),
+                    "recall": float(metrics.box.mr),
+                },
+                global_best_pt,
+            )
+
+            print(
+                f"[DEBUG][SERVER] New global best saved: "
+                f"{global_best_pt} | round={server_round}, mAP50={map50:.4f}"
+            )
+
+        asr_m, asr_r, tgts_m, tgts_r, asr_cp = 0.0, 0.0, 0, 0, 0.0
+        
+        effective_attack_eval = (
+            bool(attack_config.get("attack-flag", False))
+            and int(server_round) >= int(attack_config.get("attack-start-round", 1))
+        )
+        
+        if effective_attack_eval:
+            active_gen_files = _LAST_METRICS.get("attacker_gen_paths", [])
+
+            if active_gen_files:
+                sync_global_generator(
+                    active_gen_files,
+                    attack_config.get("trigger-size", 32),
+                    attack_config.get("num-classes", 7),
+                    gen_weights=_LAST_METRICS.get("gen_weights", {})
+                )
+
+            asr_m, asr_r, tgts_m, tgts_r, asr_cp = measure_anywheredoor_asr(
+                YOLO(temp_pt),
+                attack_config,
+                global_data_yaml
+            )
         
         eval_mode = attack_config.get("eval-attack-mode", "targeted_miscls")
         main_asr = asr_r if eval_mode == "targeted_removal" else asr_m
         
+        # 🎯 분석 사항 반영: CSV 로깅에 `Total_Gen_Loss_Labels` 및 `Total_Gen_Steps` 정상 매핑 저장
         with open(csv_path, 'a', newline='') as f:
             csv.writer(f).writerow([
-                server_round, round(map50,4), round(f1_score,4), round(float(metrics.box.mp),4), round(float(metrics.box.mr),4), 
-                round(asr_m,4), round(asr_r,4), round(main_asr,4), tgts_m, tgts_r, 
-                _LAST_METRICS["num_attackers"], _LAST_METRICS["total_lbl_chg"]
+                server_round,
+                round(map50, 4),
+                round(f1_score, 4),
+                round(float(metrics.box.mp), 4),
+                round(float(metrics.box.mr), 4),
+                round(asr_m, 4),
+                round(asr_r, 4),
+                round(asr_cp, 4),
+                round(main_asr, 4),
+                tgts_m,
+                tgts_r,
+                _LAST_METRICS["num_attackers"],
+                _LAST_METRICS["total_lbl_chg"],
+                _LAST_METRICS.get("total_poisoned_batches", 0),
+                _LAST_METRICS.get("total_gen_loss_labels", 0),
+                _LAST_METRICS.get("total_gen_steps", 0),
+                len(_LAST_METRICS.get("attacker_gen_paths", [])),
+                round(_LAST_METRICS.get("avg_param_delta", 0.0), 6),
+                round(_LAST_METRICS.get("max_param_delta", 0.0), 6),
             ])
         if os.path.exists(temp_pt): os.remove(temp_pt)
         
@@ -279,36 +584,57 @@ def get_evaluate_fn(attack_config):
 def server_fn(context: Context):
     cfg = context.run_config
     
-    loc_epochs = cfg_get(cfg, "local-epochs", 2)
-    print(f"[DEBUG][SERVER] run_config={dict(cfg)}")
-    print(f"[DEBUG][SERVER] local-epochs={loc_epochs}")
+    loc_epochs = cfg_get(cfg, "local-epochs", 5)
     
-    init_global_generator_once(
-        patch_size=cfg_get(cfg, "trigger-size", 32), 
-        nc=cfg_get(cfg, "num-classes", 3),
-        reset=cfg_get(cfg, "reset-global-generator", True)
-    )
+    atk_flag = parse_bool(cfg_get(cfg, "attack-flag", False))
+    if atk_flag:
+        init_global_generator_once(
+            patch_size=int(cfg_get(cfg, "trigger-size", 32)), 
+            nc=int(cfg_get(cfg, "num-classes", 7)),
+            reset=parse_bool(cfg_get(cfg, "reset-global-generator", True))
+        )
+    
+    fixed_src = cfg_get(cfg, "fixed-source-class", None)
+    fixed_tgt = cfg_get(cfg, "fixed-target-class", None)
     
     atk_cfg = {
-        "attack-flag": cfg_get(cfg, "attack-flag", True),
+        "attack-flag": atk_flag,
+        "attack-start-round": cfg_get(cfg, "attack-start-round", 5),
         "trigger-size": cfg_get(cfg, "trigger-size", 32),
-        "num-classes": cfg_get(cfg, "num-classes", 3),
+        "num-classes": int(cfg_get(cfg, "num-classes", 7)),
         "epsilon": cfg_get(cfg, "epsilon", 0.10),
         "eval-attack-mode": cfg_get(cfg, "eval-attack-mode", "targeted_miscls"),
         "asr-conf-thresh": cfg_get(cfg, "asr-conf-thresh", 0.1),
         "asr-max-pairs": cfg_get(cfg, "asr-max-pairs", 6),
         "asr-num-samples": cfg_get(cfg, "asr-num-samples", 100),
         "asr-seed": cfg_get(cfg, "asr-seed", 2026),
-        "fixed-source-class": cfg_get(cfg, "fixed-source-class", 0),
-        "fixed-target-class": cfg_get(cfg, "fixed-target-class", 1),
+        "fixed-source-class": None if fixed_src is None else int(fixed_src),
+        "fixed-target-class": None if fixed_tgt is None else int(fixed_tgt),
     }
+
+    global_data_yaml = cfg_get(cfg, "data-yaml", None)
+    if global_data_yaml is None:
+        raise ValueError("data-yaml must be set in pyproject.toml")
+        
+    assert_data_yaml_nc(global_data_yaml, int(cfg_get(cfg, "num-classes", 7)), "server")
+
+    model_yaml = str(cfg_get(cfg, "model-yaml", "yolov8n_custom.yaml"))
+    pretrained_weights = str(cfg_get(cfg, "pretrained-weights", "yolov8n.pt"))
+    
+    initial_parameters = get_initial_parameters(
+        model_yaml=model_yaml,
+        pretrained_weights=pretrained_weights,
+        expected_nc=int(cfg_get(cfg, "num-classes", 7)),
+    )
     
     strategy = FedAvg(
-        fraction_fit=cfg_get(cfg, "fraction-fit", 0.2), 
-        evaluate_fn=get_evaluate_fn(atk_cfg), 
+        fraction_fit=float(cfg_get(cfg, "fraction-fit", 1.0)), 
+        fraction_evaluate=0.0,
+        evaluate_fn=get_evaluate_fn(atk_cfg, global_data_yaml, model_yaml, pretrained_weights), 
         on_fit_config_fn=get_on_fit_config_fn(loc_epochs), 
-        fit_metrics_aggregation_fn=fit_metrics_aggregation_fn
+        fit_metrics_aggregation_fn=fit_metrics_aggregation_fn,
+        initial_parameters=initial_parameters,
     )
-    return ServerAppComponents(strategy=strategy, config=ServerConfig(num_rounds=cfg_get(cfg, "num-server-rounds", 3)))
+    return ServerAppComponents(strategy=strategy, config=ServerConfig(num_rounds=int(cfg_get(cfg, "num-server-rounds", 50))))
 
 app = ServerApp(server_fn=server_fn)

@@ -1,0 +1,25 @@
+[CONVERT] VOC2007 trainval -> train: images=5011, nonempty_labels=5011, class_counts={8: 798, 6: 1250, 12: 362, 14: 4690, 1: 353, 7: 376, 11: 510, 18: 297, 0: 306, 19: 324, 2: 486, 4: 505, 13: 339, 15: 514, 3: 290, 17: 248, 16: 257, 5: 229, 10: 215, 9: 259}
+[CONVERT] VOC2012 trainval -> train: images=11540, nonempty_labels=11540, class_counts={19: 784, 18: 628, 14: 8566, 3: 850, 12: 710, 9: 588, 4: 1259, 11: 1515, 0: 865, 6: 2017, 5: 593, 1: 711, 8: 2354, 10: 609, 2: 1119, 7: 1217, 13: 713, 16: 813, 17: 566, 15: 973}
+[CONVERT] VOC2007 test -> val: images=4952, nonempty_labels=4952, class_counts={11: 489, 14: 4528, 18: 282, 17: 239, 8: 756, 6: 1201, 15: 480, 10: 206, 12: 348, 7: 358, 9: 244, 5: 213, 1: 337, 13: 325, 2: 459, 19: 308, 16: 242, 0: 285, 3: 263, 4: 469}
+[DONE] wrote datas/voc_yolo/data.yaml
+[TOTAL class_counts]
+0 aeroplane 1456
+1 bicycle 1401
+2 bird 2064
+3 boat 1403
+4 bottle 2233
+5 bus 1035
+6 car 4468
+7 cat 1951
+8 chair 3908
+9 cow 1091
+10 diningtable 1030
+11 dog 2514
+12 horse 1420
+13 motorbike 1377
+14 person 17784
+15 pottedplant 1967
+16 sheep 1312
+17 sofa 1053
+18 train 1207
+19 tvmonitor 1416

@@ -1,0 +1,105 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fl-yolo-backdoor"
+version = "3.6.0"
+description = "Federated Learning YOLO Backdoor Test"
+dependencies = [
+    "flwr>=1.12.0",
+    "ultralytics>=8.0.0",
+    "torch>=2.0.0",
+    "torchvision",
+    "opencv-python",
+    "pyyaml"
+]
+
+[tool.flwr.app]
+publisher = "limulu"
+
+[tool.flwr.app.components]
+serverapp = "fl_yolo_backdoor.server_app:app"
+clientapp = "fl_yolo_backdoor.client_app:app"
+
+[tool.flwr.app.config]
+num-server-rounds = 100
+local-epochs = 3
+total-clients = 100
+fraction-fit = 0.3
+
+dataset-name = "coco"
+num-classes = 80
+
+data-yaml = "datas/coco/data.yaml"
+partition-root = "datas/coco/client_isolated_100"
+model-yaml = "yolov8n.yaml"
+pretrained-weights = "yolov8n.pt"
+
+local-batch = 32
+optimizer = "AdamW"
+local-lr0 = 0.001
+min-lr = 0.0001
+lr-decay = 0.99
+
+yolo-mosaic = 0.1
+yolo-erasing = 0.1
+yolo-fliplr = 0.1
+yolo-hsv-h = 0.003
+yolo-hsv-s = 0.1
+yolo-hsv-v = 0.1
+yolo-scale = 0.1
+yolo-translate = 0.03
+yolo-warmup-epochs = 0.1
+yolo-freeze = 0
+
+reset-global-generator = true
+attack-flag = true
+attack-start-round = 5
+
+attacker-ratio = 0.2
+poison-rate = 0.3
+
+trigger-size = 32
+epsilon = 0.1
+generator-lr = 0.01
+trigger-inner-steps = 2
+generator-target-only = true
+
+# 🎯 분석 사항 반영: 주석 해제하여 Source-rich Attacker 전략 실제 적용 보장
+attacker-ids-json = "datas/lisa_yolo_full/attackers.json"
+
+eval-attack-mode = "targeted_miscls"
+
+# COCO: car(2) -> truck(7)
+fixed-source-class = 2
+fixed-target-class = 7
+
+asr-conf-thresh = 0.1
+asr-max-pairs = 6
+asr-num-samples = 2000
+asr-seed = 2026
+
+
+#######################################################################
+# CONFIGURATION MIGRATION NOTICE:
+#
+# What was previously called "federation config" for SuperLink
+# connections in pyproject.toml has been renamed and moved.
+#
+# These settings are now **SuperLink connection configuration**
+# and are defined in the Flower configuration file.
+#
+# The entries below are commented out intentionally and are kept
+# only as a migration reference.
+#
+# Docs: https://flower.ai/docs/framework/ref-flower-configuration.html
+#######################################################################
+
+# [tool.flwr.federations]
+# default = "local-simulation"
+
+# [tool.flwr.federations.local-simulation]
+# options.num-supernodes = 100
+# options.backend.client-resources.num-cpus = 4
+# options.backend.client-resources.num-gpus = 1.0

@@ -4,9 +4,16 @@ datas/
 # log
 fl_logs/
 runs/
+fl_logs_voc/
 
 # tmp
 tmp/
 
 # temp model weight
 *.pt
+
+# experiment logs
+*.log
+result/**/*.log
+fl_logs/
+runs/
